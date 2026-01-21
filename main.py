@@ -3,6 +3,9 @@ from discord.ext import commands
 from discord import app_commands
 import requests
 import json
+import os
+from threading import Thread
+from flask import Flask
 
 # Configuration du bot
 intents = discord.Intents.default()
@@ -210,10 +213,26 @@ async def on_member_remove(member):
     if channel:
         await channel.send(f"👋 **{member.name}** a quitté le serveur.")
 
+# Serveur web pour Render (obligatoire pour le plan gratuit)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Bot Discord actif !"
+
+def run_web():
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+
 # Lance le bot
 import os
 TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
     print("❌ ERREUR: Token Discord non trouvé dans les variables d'environnement !")
 else:
+    keep_alive()  # Lance le serveur web
     bot.run(TOKEN)
