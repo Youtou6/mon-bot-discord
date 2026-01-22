@@ -5,6 +5,7 @@ import requests
 import json
 import os
 import re
+import io
 from threading import Thread
 from flask import Flask
 from datetime import datetime, timedelta
@@ -23,6 +24,8 @@ automod_config = {}
 user_infractions = defaultdict(lambda: defaultdict(int))
 message_history = defaultdict(lambda: [])
 spam_tracker = defaultdict(lambda: {'count': 0, 'last_time': datetime.now()})
+tickets = {}  # {user_id: {'channel_id': int, 'guild_id': int, 'messages': []}}
+ticket_config = {}  # {guild_id: {'category_id': int, 'log_channel_id': int}}
 
 # Configuration AutoMod par défaut
 DEFAULT_AUTOMOD = {
@@ -377,6 +380,61 @@ async def automod_panel(interaction: discord.Interaction):
     
     view = AutoModMainView(interaction.guild.id)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="tickets", description="[ADMIN] Voir tous les tickets ouverts")
+async def list_tickets(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    guild_tickets = [
+        (user_id, data) for user_id, data in tickets.items() 
+        if data['guild_id'] == interaction.guild.id
+    ]
+    
+    if not guild_tickets:
+        await interaction.response.send_message("✅ Aucun ticket ouvert actuellement", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title=f"🎫 Tickets ouverts ({len(guild_tickets)})",
+        color=discord.Color.blue()
+    )
+    
+    for user_id, data in guild_tickets:
+        user = bot.get_user(user_id)
+        channel = interaction.guild.get_channel(data['channel_id'])
+        
+        if user and channel:
+            msg_count = len(data['messages'])
+            embed.add_field(
+                name=f"👤 {user.name}",
+                value=f"Salon: {channel.mention}\nMessages: {msg_count}",
+                inline=False
+            )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="closeticket", description="[STAFF] Fermer le ticket actuel")
+async def close_ticket_command(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    # Vérifier si c'est un salon de ticket
+    ticket_user_id = None
+    for user_id, ticket_data in tickets.items():
+        if ticket_data['channel_id'] == interaction.channel.id:
+            ticket_user_id = user_id
+            break
+    
+    if not ticket_user_id:
+        await interaction.response.send_message("❌ Ce n'est pas un salon de ticket !", ephemeral=True)
+        return
+    
+    # Utiliser la vue de confirmation
+    view = TicketCloseConfirmView(interaction.channel, ticket_user_id)
+    await interaction.response.send_message("⚠️ Voulez-vous vraiment fermer ce ticket ?", view=view, ephemeral=True)
 
 # ========== SYSTÈME AUTOMOD - DÉTECTION ==========
 
