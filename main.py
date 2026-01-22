@@ -691,107 +691,108 @@ async def on_message(message):
     should_delete = False
     reason = None
     
-    # SPAM
-    if check_spam(message.author.id, guild_id):
-        should_delete = True
-        reason = "Spam de messages"
-    
-    # MENTIONS
-    elif check_mentions(message, guild_id):
-        should_delete = True
-        reason = "Trop de mentions"
-    
-    # DUPLICATE
-    elif check_duplicate(message.author.id, message, guild_id):
-        should_delete = True
-        reason = "Messages dupliqués"
-    
-    # FLOOD
-    elif check_flood(message, guild_id):
-        should_delete = True
-        reason = "Flood de caractères"
-    
-    # CAPS
-    elif check_caps(message, guild_id):
-        should_delete = True
-        reason = "Trop de majuscules"
-    
-    # EMOJI SPAM
-    elif check_emoji_spam(message, guild_id):
-        should_delete = True
-        reason = "Spam d'emojis"
-    
-    # MOTS INTERDITS
-    bad_word_type = check_bad_words(message, guild_id)
-    if bad_word_type:
-        should_delete = True
-        reasons_map = {
-            'insult': 'Insulte',
-            'slur': 'Propos haineux',
-            'nsfw': 'Contenu NSFW',
-            'violence': 'Propos violent'
-        }
-        reason = reasons_map.get(bad_word_type, 'Langage inapproprié')
-        
-        # Ban immédiat pour propos haineux
-        if bad_word_type == 'slur':
-            try:
-                await message.author.ban(reason="AutoMod: Propos haineux")
-                await log_automod_action(message.guild, message.author, "Propos haineux", "BAN IMMÉDIAT", message)
-                await message.delete()
-                return
-            except:
-                pass
-    
-    # LIENS
-    link_type = check_links(message, guild_id)
-    if link_type:
-        should_delete = True
-        reasons_map = {
-            'discord_link': 'Lien Discord non autorisé',
-            'scam': 'Tentative de scam',
-            'suspicious_link': 'Lien suspect'
-        }
-        reason = reasons_map.get(link_type, 'Lien interdit')
-        
-        # Ban pour scam
-        if link_type == 'scam':
-            try:
-                await message.author.ban(reason="AutoMod: Tentative de scam")
-                await log_automod_action(message.guild, message.author, "Tentative de scam", "BAN IMMÉDIAT", message)
-                await message.delete()
-                return
-            except:
-                pass
-    
-    # Si violation détectée
-    if should_delete and reason:
-        try:
-            await message.delete()
-            
-            # Appliquer sanction
-            action = await apply_sanction(message.author, guild_id, reason)
-            
-            # Log
-            await log_automod_action(message.guild, message.author, reason, action or "Message supprimé", message)
-            
-            # Notifier l'utilisateur
-            try:
-                embed = discord.Embed(
-                    title="⚠️ Message supprimé par AutoMod",
-                    description=f"**Raison:** {reason}",
-                    color=discord.Color.red()
-                )
-                if action:
-                    embed.add_field(name="Action", value=action, inline=False)
+                # SPAM
+                if check_spam(message.author.id, guild_id):
+                    should_delete = True
+                    reason = "Spam de messages"
                 
-                await message.author.send(embed=embed)
-            except:
-                pass
-        
-        except:
-            pass
+                # MENTIONS
+                elif check_mentions(message, guild_id):
+                    should_delete = True
+                    reason = "Trop de mentions"
+                
+                # DUPLICATE
+                elif check_duplicate(message.author.id, message, guild_id):
+                    should_delete = True
+                    reason = "Messages dupliqués"
+                
+                # FLOOD
+                elif check_flood(message, guild_id):
+                    should_delete = True
+                    reason = "Flood de caractères"
+                
+                # CAPS
+                elif check_caps(message, guild_id):
+                    should_delete = True
+                    reason = "Trop de majuscules"
+                
+                # EMOJI SPAM
+                elif check_emoji_spam(message, guild_id):
+                    should_delete = True
+                    reason = "Spam d'emojis"
+                
+                # MOTS INTERDITS
+                bad_word_type = check_bad_words(message, guild_id)
+                if bad_word_type:
+                    should_delete = True
+                    reasons_map = {
+                        'insult': 'Insulte',
+                        'slur': 'Propos haineux',
+                        'nsfw': 'Contenu NSFW',
+                        'violence': 'Propos violent'
+                    }
+                    reason = reasons_map.get(bad_word_type, 'Langage inapproprié')
+                    
+                    # Ban immédiat pour propos haineux
+                    if bad_word_type == 'slur':
+                        try:
+                            await message.author.ban(reason="AutoMod: Propos haineux")
+                            await log_automod_action(message.guild, message.author, "Propos haineux", "BAN IMMÉDIAT", message)
+                            await message.delete()
+                            return
+                        except:
+                            pass
+                
+                # LIENS
+                link_type = check_links(message, guild_id)
+                if link_type:
+                    should_delete = True
+                    reasons_map = {
+                        'discord_link': 'Lien Discord non autorisé',
+                        'scam': 'Tentative de scam',
+                        'suspicious_link': 'Lien suspect'
+                    }
+                    reason = reasons_map.get(link_type, 'Lien interdit')
+                    
+                    # Ban pour scam
+                    if link_type == 'scam':
+                        try:
+                            await message.author.ban(reason="AutoMod: Tentative de scam")
+                            await log_automod_action(message.guild, message.author, "Tentative de scam", "BAN IMMÉDIAT", message)
+                            await message.delete()
+                            return
+                        except:
+                            pass
+                
+                # Si violation détectée
+                if should_delete and reason:
+                    try:
+                        await message.delete()
+                        
+                        # Appliquer sanction
+                        action = await apply_sanction(message.author, guild_id, reason)
+                        
+                        # Log
+                        await log_automod_action(message.guild, message.author, reason, action or "Message supprimé", message)
+                        
+                        # Notifier l'utilisateur
+                        try:
+                            embed = discord.Embed(
+                                title="⚠️ Message supprimé par AutoMod",
+                                description=f"**Raison:** {reason}",
+                                color=discord.Color.red()
+                            )
+                            if action:
+                                embed.add_field(name="Action", value=action, inline=False)
+                            
+                            await message.author.send(embed=embed)
+                        except:
+                            pass
+                    
+                    except:
+                        pass
     
+    # TOUJOURS traiter les commandes à la fin
     await bot.process_commands(message)
 
 @bot.event
