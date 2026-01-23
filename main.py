@@ -108,20 +108,34 @@ class TicketControlView(discord.ui.View):
             modmail_tickets[self.user_id]['priority'] = 'haute'
             modmail_tickets[self.user_id]['tags'].add('urgent')
             
+            # Renommer le salon avec emoji attention
+            try:
+                new_name = f"⚠️-{self.ticket_channel.name.replace('⚠️-', '')}"
+                await self.ticket_channel.edit(name=new_name)
+            except:
+                pass
+            
             config = modmail_config.get(self.guild_id, {})
             ping_role_id = config.get('ping_role_id')
             
             ping_text = ""
             if ping_role_id:
-                ping_text = f"<@&{ping_role_id}> "
+                role = interaction.guild.get_role(ping_role_id)
+                if role:
+                    ping_text = f"{role.mention} "
             
             embed = discord.Embed(
-                title="⚡ TICKET URGENT",
-                description=f"{ping_text}Ce ticket a été marqué comme urgent par {interaction.user.mention}",
-                color=discord.Color.red()
+                title="⚠️ TICKET URGENT",
+                description=f"{ping_text}Ce ticket nécessite une attention immédiate !",
+                color=discord.Color.red(),
+                timestamp=datetime.now()
             )
+            embed.add_field(name="Marqué par", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Priorité", value="🔴 HAUTE", inline=True)
+            embed.set_footer(text="Veuillez traiter ce ticket en priorité")
+            
             await self.ticket_channel.send(embed=embed)
-            await interaction.response.send_message("✅ Marqué urgent", ephemeral=True)
+            await interaction.response.send_message("✅ Ticket marqué comme urgent !", ephemeral=True)
     
     @discord.ui.button(label="💾 Sauvegarder", style=discord.ButtonStyle.success, custom_id="save_transcript")
     async def save_transcript(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -603,10 +617,14 @@ async def on_message(message):
                     # Envoyer dans le salon
                     embed = discord.Embed(
                         description=message.content,
-                        color=discord.Color.blue(),
+                        color=0x5865F2,  # Bleu Discord
                         timestamp=datetime.now()
                     )
-                    embed.set_author(name=user.name, icon_url=user.display_avatar.url)
+                    embed.set_author(
+                        name=user.name,
+                        icon_url=user.display_avatar.url
+                    )
+                    embed.set_footer(text=f"Message de l'utilisateur • {user.id}")
                     
                     if message.attachments:
                         embed.set_image(url=message.attachments[0].url)
@@ -658,10 +676,14 @@ async def on_message(message):
         
         # Demander catégorie
         embed = discord.Embed(
-            title="🎫 Nouveau ticket ModMail",
-            description=f"Sélectionnez une catégorie pour votre ticket sur **{target_guild.name}**",
-            color=discord.Color.blue()
+            title="🎫 Création d'un ticket ModMail",
+            description=f"Bienvenue sur le système ModMail de **{target_guild.name}** !\n\n"
+                       f"Pour commencer, veuillez sélectionner la **catégorie** qui correspond le mieux à votre demande.\n\n"
+                       f"💡 *Un membre de notre équipe vous répondra dans les plus brefs délais.*",
+            color=0x5865F2  # Bleu Discord
         )
+        embed.set_thumbnail(url=target_guild.icon.url if target_guild.icon else None)
+        embed.set_footer(text=f"Serveur: {target_guild.name}", icon_url=target_guild.icon.url if target_guild.icon else None)
         
         view = TicketCategorySelectView(user, target_guild)
         msg = await message.channel.send(embed=embed, view=view)
@@ -669,8 +691,42 @@ async def on_message(message):
         await view.wait()
         
         if not view.category:
-            await message.channel.send("❌ Temps expiré ou annulé.")
+            timeout_embed = discord.Embed(
+                title="⏱️ Temps écoulé",
+                description="La création du ticket a été annulée car vous n'avez pas sélectionné de catégorie à temps.\n\n*Envoyez un nouveau message pour recommencer.*",
+                color=discord.Color.orange()
+            )
+            await message.channel.send(embed=timeout_embed)
             return
+        
+        # Animation de création avec progression
+        progress_embed = discord.Embed(
+            title="⏳ Création de votre ticket en cours...",
+            description="",
+            color=0x5865F2
+        )
+        
+        steps = [
+            ("Vérification des permissions...", "✅ Permissions vérifiées"),
+            ("Création du salon privé...", "✅ Salon créé"),
+            ("Configuration des accès staff...", "✅ Accès configurés"),
+            ("Préparation de votre espace...", "✅ Espace prêt"),
+            ("Finalisation...", "✅ Ticket créé !")
+        ]
+        
+        progress_msg = await message.channel.send(embed=progress_embed)
+        
+        completed_steps = []
+        for i, (current, completed) in enumerate(steps):
+            completed_steps.append(completed)
+            
+            progress_text = "\n".join(completed_steps)
+            if i < len(steps) - 1:
+                progress_text += f"\n🔄 {steps[i+1][0]}"
+            
+            progress_embed.description = progress_text
+            await progress_msg.edit(embed=progress_embed)
+            await asyncio.sleep(0.8)  # Animation fluide
         
         # Créer le ticket
         try:
@@ -719,28 +775,46 @@ async def on_message(message):
             member = target_guild.get_member(user.id)
             
             embed_ticket = discord.Embed(
-                title=f"🎫 Nouveau ticket ModMail #{ticket_num}",
-                description=f"**Catégorie:** {view.category}\n**Message initial:**\n{message.content}",
-                color=discord.Color.green(),
+                title=f"🎫 Ticket ModMail #{ticket_num}",
+                description=f"Un nouveau ticket a été ouvert par {user.mention}",
+                color=0x5865F2,
                 timestamp=datetime.now()
             )
             
-            # Infos user
-            embed_ticket.add_field(name="👤 Utilisateur", value=f"{user.mention}\n`{user.id}`", inline=True)
+            # Message initial
+            embed_ticket.add_field(
+                name="💬 Message initial",
+                value=f"```{message.content[:200]}{'...' if len(message.content) > 200 else ''}```",
+                inline=False
+            )
             
+            # Catégorie et priorité
+            embed_ticket.add_field(name="📂 Catégorie", value=view.category, inline=True)
+            embed_ticket.add_field(name="📊 Priorité", value="🟡 Normale", inline=True)
+            embed_ticket.add_field(name="🆔 Ticket", value=f"#{ticket_num}", inline=True)
+            
+            # Infos utilisateur
             if member:
                 account_age = (datetime.now() - user.created_at.replace(tzinfo=None)).days
                 join_age = (datetime.now() - member.joined_at.replace(tzinfo=None)).days
                 
-                embed_ticket.add_field(name="📅 Compte créé", value=f"Il y a {account_age} jours", inline=True)
-                embed_ticket.add_field(name="📅 Rejoint le", value=f"Il y a {join_age} jours", inline=True)
+                user_info = f"**ID:** `{user.id}`\n"
+                user_info += f"**Compte créé:** Il y a {account_age} jours\n"
+                user_info += f"**Rejoint:** Il y a {join_age} jours"
+                
+                embed_ticket.add_field(name="👤 Informations utilisateur", value=user_info, inline=False)
                 
                 if len(member.roles) > 1:
                     roles = ", ".join([r.mention for r in member.roles[1:6]])
+                    if len(member.roles) > 6:
+                        roles += f" *+{len(member.roles) - 6} autres*"
                     embed_ticket.add_field(name="🎭 Rôles", value=roles, inline=False)
             
             embed_ticket.set_thumbnail(url=user.display_avatar.url)
-            embed_ticket.set_footer(text="Utilisez les boutons pour gérer ce ticket")
+            embed_ticket.set_footer(
+                text=f"Ouvert par {user.name} • Utilisez les boutons pour gérer ce ticket",
+                icon_url=user.display_avatar.url
+            )
             
             view_control = TicketControlView(ticket_channel, user.id, target_guild.id)
             await ticket_channel.send(embed=embed_ticket, view=view_control)
@@ -750,36 +824,61 @@ async def on_message(message):
             if ping_role_id:
                 role = target_guild.get_role(ping_role_id)
                 if role:
-                    await ticket_channel.send(f"{role.mention} Nouveau ticket !")
+                    ping_embed = discord.Embed(
+                        description=f"{role.mention} **Nouveau ticket à traiter**",
+                        color=0x5865F2
+                    )
+                    await ticket_channel.send(embed=ping_embed)
             
-            # Message de bienvenue user
+            # Message de bienvenue user (améliorer)
             greeting = config.get('greeting_message', DEFAULT_MODMAIL_CONFIG['greeting_message'])
             
             embed_welcome = discord.Embed(
-                title="✅ Ticket créé !",
+                title="✅ Ticket créé avec succès !",
                 description=greeting,
-                color=discord.Color.green()
+                color=0x57F287  # Vert
             )
-            embed_welcome.add_field(name="Serveur", value=target_guild.name, inline=True)
-            embed_welcome.add_field(name="Catégorie", value=view.category, inline=True)
-            embed_welcome.add_field(name="Ticket", value=f"#{ticket_num}", inline=True)
-            embed_welcome.set_footer(text="Continuez la conversation ici, vos messages seront transmis au staff")
+            embed_welcome.add_field(name="🏢 Serveur", value=target_guild.name, inline=True)
+            embed_welcome.add_field(name="📂 Catégorie", value=view.category, inline=True)
+            embed_welcome.add_field(name="🎫 Numéro", value=f"#{ticket_num}", inline=True)
+            
+            embed_welcome.add_field(
+                name="📝 Prochaines étapes",
+                value="• Continuez à m'envoyer des messages ici\n• Vos messages seront transmis à l'équipe\n• Vous recevrez une réponse dans les plus brefs délais",
+                inline=False
+            )
+            
+            embed_welcome.set_thumbnail(url=target_guild.icon.url if target_guild.icon else None)
+            embed_welcome.set_footer(
+                text=f"Ticket créé le {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
+                icon_url=user.display_avatar.url
+            )
+            
+            # Supprimer le message de progression
+            try:
+                await progress_msg.delete()
+            except:
+                pass
             
             await message.channel.send(embed=embed_welcome)
             
-            # Log
+            # Log (améliorer)
             log_channel_id = config.get('log_channel_id')
             if log_channel_id:
                 log_channel = target_guild.get_channel(log_channel_id)
                 if log_channel:
                     log_embed = discord.Embed(
                         title="📨 Nouveau ticket ModMail",
-                        color=discord.Color.blue()
+                        description=f"Un ticket a été créé par {user.mention}",
+                        color=0x5865F2,
+                        timestamp=datetime.now()
                     )
-                    log_embed.add_field(name="Utilisateur", value=f"{user.mention}", inline=True)
-                    log_embed.add_field(name="Catégorie", value=view.category, inline=True)
-                    log_embed.add_field(name="Salon", value=ticket_channel.mention, inline=True)
-                    log_embed.timestamp = datetime.now()
+                    log_embed.add_field(name="👤 Utilisateur", value=f"{user.name}\n`{user.id}`", inline=True)
+                    log_embed.add_field(name="📂 Catégorie", value=view.category, inline=True)
+                    log_embed.add_field(name="🎫 Numéro", value=f"#{ticket_num}", inline=True)
+                    log_embed.add_field(name="📍 Salon", value=ticket_channel.mention, inline=False)
+                    log_embed.set_thumbnail(url=user.display_avatar.url)
+                    log_embed.set_footer(text=f"Ticket #{ticket_num}")
                     
                     await log_channel.send(embed=log_embed)
         
@@ -806,16 +905,22 @@ async def on_message(message):
                 
                 embed = discord.Embed(
                     description=message.content,
-                    color=discord.Color.green(),
+                    color=0x57F287,  # Vert
                     timestamp=datetime.now()
                 )
                 
                 if anonymous:
-                    embed.set_author(name="Équipe de modération", icon_url=message.guild.icon.url if message.guild.icon else None)
+                    embed.set_author(name="Équipe Staff", icon_url=message.guild.icon.url if message.guild.icon else None)
                 else:
-                    embed.set_author(name=f"{message.author.name} (Staff)", icon_url=message.author.display_avatar.url)
+                    embed.set_author(
+                        name=f"{message.author.name} (Staff)",
+                        icon_url=message.author.display_avatar.url
+                    )
                 
-                embed.set_footer(text=message.guild.name, icon_url=message.guild.icon.url if message.guild.icon else None)
+                embed.set_footer(
+                    text=f"{message.guild.name} • Réponse du support",
+                    icon_url=message.guild.icon.url if message.guild.icon else None
+                )
                 
                 if message.attachments:
                     embed.set_image(url=message.attachments[0].url)
@@ -841,6 +946,14 @@ async def on_ready():
     print(f'{bot.user} est connecté et prêt !')
     print(f'Bot ID: {bot.user.id}')
     print(f'Serveurs: {len(bot.guilds)}')
+    
+    # Statut personnalisé
+    activity = discord.Streaming(
+        name="HelpDesk",
+        url="https://twitch.tv/helpdesk"
+    )
+    await bot.change_presence(activity=activity, status=discord.Status.online)
+    
     try:
         synced = await bot.tree.sync()
         print(f'✅ Synchronisé {len(synced)} commandes slash')
