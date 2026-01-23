@@ -1,8 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import requests
-import json
 import os
 import re
 import io
@@ -16,415 +14,519 @@ import asyncio
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Stockage des données
-roblox_links = {}
-warnings = {}
-config_serveur = {}
-automod_config = {}
-user_infractions = defaultdict(lambda: defaultdict(int))
-message_history = defaultdict(lambda: [])
-spam_tracker = defaultdict(lambda: {'count': 0, 'last_time': datetime.now()})
-tickets = {}  # {user_id: {'channel_id': int, 'guild_id': int, 'messages': []}}
-ticket_config = {}  # {guild_id: {'category_id': int, 'log_channel_id': int}}
+# ========== STOCKAGE DES DONNÉES ==========
+modmail_tickets = {}  # {user_id: {'channel_id', 'guild_id', 'category', 'priority', 'claimed_by', 'messages', 'tags', 'created_at'}}
+modmail_config = {}  # {guild_id: {config}}
+modmail_blacklist = set()  # {user_id}
+modmail_cooldowns = {}  # {user_id: datetime}
+modmail_templates = {}  # {guild_id: {name: text}}
+staff_notes = defaultdict(list)  # {ticket_channel_id: [{author, note, timestamp}]}
+ticket_counter = defaultdict(int)  # {guild_id: count}
 
-# Configuration AutoMod par défaut
-DEFAULT_AUTOMOD = {
-    'enabled': False,
-    # Anti-spam
-    'anti_spam': {'enabled': False, 'max_messages': 5, 'timeframe': 5, 'action': 'warn'},
-    'anti_mention': {'enabled': False, 'max_mentions': 5, 'action': 'warn'},
-    'anti_duplicate': {'enabled': False, 'max_duplicates': 3, 'action': 'delete'},
-    'anti_flood': {'enabled': False, 'max_chars_repeat': 10, 'action': 'warn'},
-    'anti_emoji_spam': {'enabled': False, 'max_emojis': 10, 'action': 'delete'},
-    'anti_caps': {'enabled': False, 'caps_percent': 70, 'action': 'warn'},
-    
-    # Sécurité
-    'account_age': {'enabled': False, 'min_days': 7, 'action': 'kick'},
-    'raid_mode': {'enabled': False, 'joins_threshold': 10, 'timeframe': 60},
-    'auto_slowmode': {'enabled': False, 'trigger_messages': 20, 'slowmode_seconds': 5},
-    
-    # Filtres de contenu
-    'filter_insults': {'enabled': False, 'action': 'delete', 'words': []},
-    'filter_slurs': {'enabled': False, 'action': 'ban'},
-    'filter_nsfw': {'enabled': False, 'action': 'delete'},
-    'filter_violence': {'enabled': False, 'action': 'warn'},
-    
-    # Liens
-    'anti_discord_links': {'enabled': False, 'action': 'delete', 'whitelist': []},
-    'anti_suspicious_links': {'enabled': False, 'action': 'delete'},
-    'anti_scam': {'enabled': False, 'action': 'ban'},
-    'domain_whitelist': {'enabled': False, 'domains': []},
-    
-    # Sanctions automatiques
-    'auto_sanctions': {'enabled': False, 'warn_threshold': 3, 'mute_threshold': 5, 'kick_threshold': 7, 'ban_threshold': 10},
-    'sanction_decay': {'enabled': False, 'days': 30},
-    
-    # Nouveaux membres
-    'welcome_dm': {'enabled': False, 'message': 'Bienvenue sur le serveur !'},
-    'auto_role': {'enabled': False, 'role_id': None},
-    'verification': {'enabled': False, 'method': 'button'},
-    
-    # Logs
-    'log_deleted': {'enabled': False, 'channel_id': None},
-    'log_edited': {'enabled': False, 'channel_id': None},
-    'log_joins': {'enabled': False, 'channel_id': None},
-    'log_automod': {'enabled': False, 'channel_id': None},
-    
-    # Salons immunisés
-    'immune_channels': [],
-    'immune_roles': [],
+# Configuration par défaut
+DEFAULT_MODMAIL_CONFIG = {
+    'enabled': True,
+    'category_id': None,
+    'log_channel_id': None,
+    'transcript_channel_id': None,
+    'anonymous_staff': False,
+    'cooldown_seconds': 300,  # 5 minutes
+    'max_tickets_per_user': 1,
+    'ping_role_id': None,
+    'categories': {
+        '📢': 'Signalement',
+        '❓': 'Question',
+        '⚠️': 'Réclamation',
+        '🚫': 'Appel de sanction',
+        '🤝': 'Partenariat',
+        '🛠': 'Support technique',
+        '📋': 'Autre'
+    },
+    'auto_responses': {},
+    'greeting_message': 'Merci de nous contacter ! Un membre du staff vous répondra bientôt.',
+    'closing_message': 'Merci d\'avoir contacté notre équipe. Ce ticket est maintenant fermé.',
+    'blocked_words': ['spam', 'insulte'],
+    'satisfaction_survey': True,
 }
 
-# Listes de mots interdits (exemples de base)
-INSULTS = ['con', 'idiot', 'débile', 'crétin', 'imbécile', 'connard', 'salope', 'pute']
-SLURS = ['pd', 'tapette', 'nègre', 'bougnoule', 'youpin']
-NSFW_WORDS = ['porn', 'sex', 'nude', 'xxx', 'hentai']
-VIOLENCE_WORDS = ['tuer', 'mort', 'suicide', 'arme', 'explosif']
-SCAM_PATTERNS = [
-    r'(free|gratuit).*(nitro|steam|robux)',
-    r'(claim|réclame).*(gift|cadeau)',
-    r'discord\.gift',
-    r'steamcommunity\.(ru|cn)',
-]
+# ========== VUES INTERACTIVES ==========
 
-# ========== PANEL AUTOMOD ==========
+class TicketCategorySelectView(discord.ui.View):
+    def __init__(self, user, guild):
+        super().__init__(timeout=120)
+        self.user = user
+        self.guild = guild
+        self.category = None
+        
+        config = modmail_config.get(guild.id, DEFAULT_MODMAIL_CONFIG)
+        categories = config.get('categories', DEFAULT_MODMAIL_CONFIG['categories'])
+        
+        # Ajouter les boutons de catégories (max 5 par ligne)
+        for emoji, name in list(categories.items())[:5]:
+            button = discord.ui.Button(label=name, emoji=emoji, style=discord.ButtonStyle.primary)
+            button.callback = self.make_callback(emoji, name)
+            self.add_item(button)
+    
+    def make_callback(self, emoji, name):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user.id:
+                await interaction.response.send_message("❌ Ce n'est pas pour toi !", ephemeral=True)
+                return
+            self.category = f"{emoji} {name}"
+            self.stop()
+            await interaction.response.send_message(f"✅ Catégorie sélectionnée: **{name}**\n\nCréation du ticket...", ephemeral=True)
+        return callback
 
-class AutoModMainView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=300)
+class TicketControlView(discord.ui.View):
+    def __init__(self, ticket_channel, user_id, guild_id):
+        super().__init__(timeout=None)
+        self.ticket_channel = ticket_channel
+        self.user_id = user_id
         self.guild_id = guild_id
     
-    @discord.ui.button(label="🔒 Sécurité & Anti-raid", style=discord.ButtonStyle.danger, row=0)
-    async def security_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = SecurityConfigView(self.guild_id)
-        embed = discord.Embed(title="🔒 Configuration Sécurité & Anti-raid", color=discord.Color.red())
-        embed.description = "Configure la protection contre les raids et le spam"
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="✍️ Note interne", style=discord.ButtonStyle.secondary, custom_id="add_note")
+    async def add_note(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = NoteModal(self.ticket_channel.id)
+        await interaction.response.send_modal(modal)
     
-    @discord.ui.button(label="🚫 Modération de contenu", style=discord.ButtonStyle.primary, row=0)
-    async def content_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = ContentConfigView(self.guild_id)
-        embed = discord.Embed(title="🚫 Modération de contenu", color=discord.Color.blue())
-        embed.description = "Filtre les insultes, propos haineux, NSFW..."
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="🏷️ Claim", style=discord.ButtonStyle.primary, custom_id="claim_ticket")
+    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.user_id in modmail_tickets:
+            modmail_tickets[self.user_id]['claimed_by'] = interaction.user.id
+            
+            embed = discord.Embed(
+                title="✅ Ticket réclamé",
+                description=f"Ticket pris en charge par {interaction.user.mention}",
+                color=discord.Color.blue()
+            )
+            await self.ticket_channel.send(embed=embed)
+            await interaction.response.send_message("✅ Ticket réclamé !", ephemeral=True)
     
-    @discord.ui.button(label="🔗 Liens & Publicité", style=discord.ButtonStyle.success, row=1)
-    async def links_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = LinksConfigView(self.guild_id)
-        embed = discord.Embed(title="🔗 Liens & Publicité", color=discord.Color.green())
-        embed.description = "Contrôle les liens Discord, scam, self-promo..."
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="⚡ Urgent", style=discord.ButtonStyle.danger, custom_id="mark_urgent")
+    async def mark_urgent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.user_id in modmail_tickets:
+            modmail_tickets[self.user_id]['priority'] = 'haute'
+            modmail_tickets[self.user_id]['tags'].add('urgent')
+            
+            config = modmail_config.get(self.guild_id, {})
+            ping_role_id = config.get('ping_role_id')
+            
+            ping_text = ""
+            if ping_role_id:
+                ping_text = f"<@&{ping_role_id}> "
+            
+            embed = discord.Embed(
+                title="⚡ TICKET URGENT",
+                description=f"{ping_text}Ce ticket a été marqué comme urgent par {interaction.user.mention}",
+                color=discord.Color.red()
+            )
+            await self.ticket_channel.send(embed=embed)
+            await interaction.response.send_message("✅ Marqué urgent", ephemeral=True)
     
-    @discord.ui.button(label="⚖️ Sanctions automatiques", style=discord.ButtonStyle.secondary, row=1)
-    async def sanctions_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = SanctionsConfigView(self.guild_id)
-        embed = discord.Embed(title="⚖️ Sanctions automatiques", color=discord.Color.orange())
-        embed.description = "Configure l'escalade des sanctions"
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @discord.ui.button(label="💾 Sauvegarder", style=discord.ButtonStyle.success, custom_id="save_transcript")
+    async def save_transcript(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        transcript = await generate_transcript(self.ticket_channel, self.user_id)
+        
+        config = modmail_config.get(self.guild_id, {})
+        transcript_channel_id = config.get('transcript_channel_id')
+        
+        if transcript_channel_id:
+            channel = interaction.guild.get_channel(transcript_channel_id)
+            if channel:
+                user = bot.get_user(self.user_id)
+                ticket_data = modmail_tickets.get(self.user_id, {})
+                
+                embed = discord.Embed(
+                    title="💾 Transcript sauvegardé",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Utilisateur", value=f"{user.mention if user else 'Inconnu'} ({self.user_id})", inline=True)
+                embed.add_field(name="Catégorie", value=ticket_data.get('category', 'N/A'), inline=True)
+                embed.add_field(name="Priorité", value=ticket_data.get('priority', 'normale'), inline=True)
+                
+                claimed_by = ticket_data.get('claimed_by')
+                if claimed_by:
+                    claimed_user = interaction.guild.get_member(claimed_by)
+                    embed.add_field(name="Géré par", value=claimed_user.mention if claimed_user else 'Inconnu', inline=True)
+                
+                file = discord.File(
+                    fp=io.BytesIO(transcript.encode('utf-8')),
+                    filename=f"ticket-{self.user_id}-{datetime.now().strftime('%Y%m%d')}.txt"
+                )
+                
+                await channel.send(embed=embed, file=file)
+        
+        await interaction.followup.send("✅ Transcript sauvegardé !", ephemeral=True)
     
-    @discord.ui.button(label="👤 Nouveaux membres", style=discord.ButtonStyle.primary, row=2)
-    async def members_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = MembersConfigView(self.guild_id)
-        embed = discord.Embed(title="👤 Gestion des nouveaux membres", color=discord.Color.purple())
-        embed.description = "Bienvenue, vérification, rôle auto..."
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    @discord.ui.button(label="📊 Logs & Transparence", style=discord.ButtonStyle.secondary, row=2)
-    async def logs_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = LogsConfigView(self.guild_id)
-        embed = discord.Embed(title="📊 Logs & Transparence", color=discord.Color.blurple())
-        embed.description = "Configure les salons de logs"
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-    
-    @discord.ui.button(label="✅ Activer/Désactiver AutoMod", style=discord.ButtonStyle.danger, row=3)
-    async def toggle_automod(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
-        
-        automod_config[self.guild_id]['enabled'] = not automod_config[self.guild_id]['enabled']
-        status = "✅ ACTIVÉ" if automod_config[self.guild_id]['enabled'] else "❌ DÉSACTIVÉ"
-        
-        await interaction.response.send_message(f"AutoMod est maintenant {status} !", ephemeral=True)
-    
-    @discord.ui.button(label="📋 Voir la configuration", style=discord.ButtonStyle.success, row=3)
-    async def view_config(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config.get(self.guild_id, DEFAULT_AUTOMOD)
-        
-        embed = discord.Embed(title="📋 Configuration AutoMod actuelle", color=discord.Color.gold())
-        
-        status = "✅ Activé" if config['enabled'] else "❌ Désactivé"
-        embed.add_field(name="Statut global", value=status, inline=False)
-        
-        # Compte les modules actifs
-        active_modules = sum(1 for key, val in config.items() 
-                            if isinstance(val, dict) and val.get('enabled', False))
-        
-        embed.add_field(name="Modules actifs", value=f"{active_modules} modules", inline=True)
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    @discord.ui.button(label="🔒 Fermer", style=discord.ButtonStyle.danger, custom_id="close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = CloseConfirmView(self.ticket_channel, self.user_id, self.guild_id)
+        await interaction.response.send_message("⚠️ Voulez-vous vraiment fermer ce ticket ?", view=view, ephemeral=True)
 
-class SecurityConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
+class CloseConfirmView(discord.ui.View):
+    def __init__(self, ticket_channel, user_id, guild_id):
+        super().__init__(timeout=30)
+        self.ticket_channel = ticket_channel
+        self.user_id = user_id
         self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
     
-    @discord.ui.button(label="Anti-Spam", style=discord.ButtonStyle.secondary)
-    async def toggle_spam(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_spam']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Spam: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Anti-Mentions", style=discord.ButtonStyle.secondary)
-    async def toggle_mentions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_mention']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Mentions: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Anti-Flood", style=discord.ButtonStyle.secondary)
-    async def toggle_flood(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_flood']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Flood: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Mode Anti-Raid", style=discord.ButtonStyle.danger)
-    async def toggle_raid(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['raid_mode']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Mode Anti-Raid: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Âge compte minimum", style=discord.ButtonStyle.secondary)
-    async def toggle_age(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['account_age']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Vérif âge compte: {config['enabled']} (min {config['min_days']} jours)", ephemeral=True)
-
-class ContentConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
-        self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
-    
-    @discord.ui.button(label="Filtre Insultes", style=discord.ButtonStyle.secondary)
-    async def toggle_insults(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['filter_insults']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Filtre insultes: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Filtre Propos Haineux", style=discord.ButtonStyle.danger)
-    async def toggle_slurs(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['filter_slurs']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Filtre propos haineux: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Filtre NSFW", style=discord.ButtonStyle.secondary)
-    async def toggle_nsfw(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['filter_nsfw']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Filtre NSFW: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Filtre Violence", style=discord.ButtonStyle.secondary)
-    async def toggle_violence(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['filter_violence']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Filtre violence: {config['enabled']}", ephemeral=True)
-
-class LinksConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
-        self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
-    
-    @discord.ui.button(label="Anti-Discord Links", style=discord.ButtonStyle.secondary)
-    async def toggle_discord(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_discord_links']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Discord Links: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Anti-Scam", style=discord.ButtonStyle.danger)
-    async def toggle_scam(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_scam']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Scam: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Liens Suspects", style=discord.ButtonStyle.secondary)
-    async def toggle_suspicious(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['anti_suspicious_links']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Anti-Liens suspects: {config['enabled']}", ephemeral=True)
-
-class SanctionsConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
-        self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
-    
-    @discord.ui.button(label="Activer Sanctions Auto", style=discord.ButtonStyle.success)
-    async def toggle_sanctions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['auto_sanctions']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Sanctions automatiques: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Voir les seuils", style=discord.ButtonStyle.primary)
-    async def view_thresholds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['auto_sanctions']
+    @discord.ui.button(label="✅ Oui, fermer", style=discord.ButtonStyle.danger)
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         
-        embed = discord.Embed(title="⚖️ Seuils de sanctions", color=discord.Color.orange())
-        embed.add_field(name="⚠️ Warn", value=f"{config['warn_threshold']} infractions", inline=True)
-        embed.add_field(name="🔇 Mute", value=f"{config['mute_threshold']} infractions", inline=True)
-        embed.add_field(name="👢 Kick", value=f"{config['kick_threshold']} infractions", inline=True)
-        embed.add_field(name="🔨 Ban", value=f"{config['ban_threshold']} infractions", inline=True)
+        # Sauvegarder le transcript
+        transcript = await generate_transcript(self.ticket_channel, self.user_id)
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        config = modmail_config.get(self.guild_id, {})
+        transcript_channel_id = config.get('transcript_channel_id')
+        
+        if transcript_channel_id:
+            channel = interaction.guild.get_channel(transcript_channel_id)
+            if channel:
+                user = bot.get_user(self.user_id)
+                ticket_data = modmail_tickets.get(self.user_id, {})
+                
+                embed = discord.Embed(
+                    title="🔒 Ticket fermé",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="Utilisateur", value=f"{user.mention if user else 'Inconnu'} ({self.user_id})", inline=True)
+                embed.add_field(name="Fermé par", value=interaction.user.mention, inline=True)
+                embed.add_field(name="Catégorie", value=ticket_data.get('category', 'N/A'), inline=True)
+                
+                duration = datetime.now() - ticket_data.get('created_at', datetime.now())
+                embed.add_field(name="Durée", value=str(duration).split('.')[0], inline=True)
+                
+                file = discord.File(
+                    fp=io.BytesIO(transcript.encode('utf-8')),
+                    filename=f"ticket-{self.user_id}-{datetime.now().strftime('%Y%m%d')}.txt"
+                )
+                
+                await channel.send(embed=embed, file=file)
+        
+        # Notifier l'utilisateur
+        user = bot.get_user(self.user_id)
+        if user:
+            try:
+                closing_msg = config.get('closing_message', DEFAULT_MODMAIL_CONFIG['closing_message'])
+                
+                embed = discord.Embed(
+                    title="🔒 Ticket fermé",
+                    description=closing_msg,
+                    color=discord.Color.red()
+                )
+                embed.add_field(name="Fermé par", value=interaction.user.name, inline=True)
+                
+                # Sondage de satisfaction
+                if config.get('satisfaction_survey', True):
+                    view = SatisfactionView(self.user_id, self.guild_id)
+                    await user.send(embed=embed, view=view)
+                else:
+                    await user.send(embed=embed)
+            except:
+                pass
+        
+        # Supprimer du stockage
+        if self.user_id in modmail_tickets:
+            del modmail_tickets[self.user_id]
+        
+        # Supprimer le salon
+        await self.ticket_channel.delete(reason=f"Ticket fermé par {interaction.user.name}")
+        
+        await interaction.followup.send("✅ Ticket fermé et supprimé", ephemeral=True)
+    
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.secondary)
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Annulé", ephemeral=True)
+        self.stop()
 
-class MembersConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
+class SatisfactionView(discord.ui.View):
+    def __init__(self, user_id, guild_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
         self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
     
-    @discord.ui.button(label="Message DM Bienvenue", style=discord.ButtonStyle.secondary)
-    async def toggle_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['welcome_dm']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Message DM: {config['enabled']}", ephemeral=True)
+    @discord.ui.button(label="⭐", style=discord.ButtonStyle.secondary)
+    async def one_star(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rating(interaction, 1)
     
-    @discord.ui.button(label="Rôle Automatique", style=discord.ButtonStyle.secondary)
-    async def toggle_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['auto_role']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Rôle auto: {config['enabled']}", ephemeral=True)
+    @discord.ui.button(label="⭐⭐", style=discord.ButtonStyle.secondary)
+    async def two_stars(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rating(interaction, 2)
     
-    @discord.ui.button(label="Vérification", style=discord.ButtonStyle.success)
-    async def toggle_verification(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['verification']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Vérification: {config['enabled']}", ephemeral=True)
+    @discord.ui.button(label="⭐⭐⭐", style=discord.ButtonStyle.secondary)
+    async def three_stars(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rating(interaction, 3)
+    
+    @discord.ui.button(label="⭐⭐⭐⭐", style=discord.ButtonStyle.primary)
+    async def four_stars(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rating(interaction, 4)
+    
+    @discord.ui.button(label="⭐⭐⭐⭐⭐", style=discord.ButtonStyle.success)
+    async def five_stars(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_rating(interaction, 5)
+    
+    async def handle_rating(self, interaction, rating):
+        config = modmail_config.get(self.guild_id, {})
+        log_channel_id = config.get('log_channel_id')
+        
+        if log_channel_id:
+            guild = bot.get_guild(self.guild_id)
+            if guild:
+                channel = guild.get_channel(log_channel_id)
+                if channel:
+                    embed = discord.Embed(
+                        title="⭐ Satisfaction utilisateur",
+                        description=f"Note: {'⭐' * rating} ({rating}/5)",
+                        color=discord.Color.gold()
+                    )
+                    embed.add_field(name="Utilisateur", value=f"<@{self.user_id}>", inline=True)
+                    embed.set_footer(text=datetime.now().strftime("%d/%m/%Y %H:%M"))
+                    
+                    await channel.send(embed=embed)
+        
+        await interaction.response.send_message(f"✅ Merci pour votre retour ! {'⭐' * rating}", ephemeral=True)
+        self.stop()
 
-class LogsConfigView(discord.ui.View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=180)
-        self.guild_id = guild_id
-        if self.guild_id not in automod_config:
-            automod_config[self.guild_id] = DEFAULT_AUTOMOD.copy()
+class NoteModal(discord.ui.Modal, title="Ajouter une note interne"):
+    def __init__(self, channel_id):
+        super().__init__()
+        self.channel_id = channel_id
     
-    @discord.ui.button(label="Logs Messages Supprimés", style=discord.ButtonStyle.secondary)
-    async def toggle_deleted(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['log_deleted']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Logs suppression: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Logs Éditions", style=discord.ButtonStyle.secondary)
-    async def toggle_edited(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['log_edited']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Logs éditions: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Logs Joins/Leaves", style=discord.ButtonStyle.secondary)
-    async def toggle_joins(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['log_joins']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Logs arrivées: {config['enabled']}", ephemeral=True)
-    
-    @discord.ui.button(label="Logs AutoMod", style=discord.ButtonStyle.success)
-    async def toggle_automod_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
-        config = automod_config[self.guild_id]['log_automod']
-        config['enabled'] = not config['enabled']
-        status = "✅" if config['enabled'] else "❌"
-        await interaction.response.send_message(f"{status} Logs AutoMod: {config['enabled']}", ephemeral=True)
-
-@bot.tree.command(name="automod", description="[ADMIN] Panel de configuration AutoMod complet")
-async def automod_panel(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande !", ephemeral=True)
-        return
-    
-    if interaction.guild.id not in automod_config:
-        automod_config[interaction.guild.id] = DEFAULT_AUTOMOD.copy()
-    
-    embed = discord.Embed(
-        title="🛡️ Panel AutoMod - Configuration Complète",
-        description="Bienvenue dans le panneau de configuration AutoMod !\n\n"
-                   "Utilisez les boutons ci-dessous pour configurer chaque module.",
-        color=discord.Color.gold()
+    note_input = discord.ui.TextInput(
+        label="Note (invisible pour l'utilisateur)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Tapez votre note ici...",
+        required=True,
+        max_length=1000
     )
     
-    status = "✅ **ACTIVÉ**" if automod_config[interaction.guild.id]['enabled'] else "❌ **DÉSACTIVÉ**"
-    embed.add_field(name="Statut AutoMod", value=status, inline=False)
-    
-    embed.set_footer(text="Cliquez sur les boutons pour configurer chaque catégorie")
-    
-    view = AutoModMainView(interaction.guild.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        staff_notes[self.channel_id].append({
+            'author': interaction.user.name,
+            'note': self.note_input.value,
+            'timestamp': datetime.now()
+        })
+        
+        embed = discord.Embed(
+            title="📝 Note interne ajoutée",
+            description=self.note_input.value,
+            color=discord.Color.orange()
+        )
+        embed.set_author(name=interaction.user.name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text="Cette note est invisible pour l'utilisateur")
+        
+        await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="tickets", description="[ADMIN] Voir tous les tickets ouverts")
-async def list_tickets(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_channels:
+# ========== FONCTIONS UTILITAIRES ==========
+
+async def generate_transcript(channel, user_id):
+    """Génère un transcript du ticket"""
+    lines = []
+    lines.append("="*60)
+    lines.append(f"TRANSCRIPT DU TICKET - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    lines.append("="*60)
+    lines.append(f"Utilisateur: {user_id}")
+    
+    ticket_data = modmail_tickets.get(user_id, {})
+    lines.append(f"Catégorie: {ticket_data.get('category', 'N/A')}")
+    lines.append(f"Priorité: {ticket_data.get('priority', 'normale')}")
+    
+    if ticket_data.get('claimed_by'):
+        lines.append(f"Géré par: {ticket_data['claimed_by']}")
+    
+    lines.append("="*60)
+    lines.append("")
+    
+    # Messages
+    async for message in channel.history(limit=None, oldest_first=True):
+        if message.author.bot and not message.embeds:
+            continue
+        
+        timestamp = message.created_at.strftime("%d/%m/%Y %H:%M:%S")
+        
+        if message.embeds and message.embeds[0].title == "📝 Note interne ajoutée":
+            lines.append(f"[{timestamp}] [NOTE INTERNE] {message.embeds[0].author.name}: {message.embeds[0].description}")
+        elif message.content:
+            lines.append(f"[{timestamp}] {message.author.name}: {message.content}")
+        elif message.embeds:
+            embed = message.embeds[0]
+            if embed.description:
+                lines.append(f"[{timestamp}] {message.author.name}: {embed.description}")
+    
+    # Notes internes
+    if channel.id in staff_notes and staff_notes[channel.id]:
+        lines.append("")
+        lines.append("="*60)
+        lines.append("NOTES INTERNES")
+        lines.append("="*60)
+        for note in staff_notes[channel.id]:
+            ts = note['timestamp'].strftime("%d/%m/%Y %H:%M:%S")
+            lines.append(f"[{ts}] {note['author']}: {note['note']}")
+    
+    return "\n".join(lines)
+
+def check_cooldown(user_id):
+    """Vérifie si l'utilisateur est en cooldown"""
+    if user_id in modmail_cooldowns:
+        time_left = (modmail_cooldowns[user_id] - datetime.now()).total_seconds()
+        if time_left > 0:
+            return int(time_left)
+    return 0
+
+def is_blacklisted(user_id):
+    """Vérifie si l'utilisateur est blacklisté"""
+    return user_id in modmail_blacklist
+
+def check_bad_words(content, guild_id):
+    """Vérifie les mots interdits"""
+    config = modmail_config.get(guild_id, {})
+    blocked_words = config.get('blocked_words', [])
+    
+    content_lower = content.lower()
+    for word in blocked_words:
+        if word in content_lower:
+            return True
+    return False
+
+# ========== COMMANDES SLASH ==========
+
+@bot.tree.command(name="modmail_setup", description="[ADMIN] Configurer le système ModMail")
+@app_commands.describe(
+    categorie="Catégorie où créer les tickets",
+    logs="Salon pour les logs",
+    transcripts="Salon pour les transcripts"
+)
+async def modmail_setup(
+    interaction: discord.Interaction,
+    categorie: discord.CategoryChannel,
+    logs: discord.TextChannel,
+    transcripts: discord.TextChannel
+):
+    if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
         return
     
-    guild_tickets = [
-        (user_id, data) for user_id, data in tickets.items() 
-        if data['guild_id'] == interaction.guild.id
-    ]
+    guild_id = interaction.guild.id
     
-    if not guild_tickets:
-        await interaction.response.send_message("✅ Aucun ticket ouvert actuellement", ephemeral=True)
-        return
+    if guild_id not in modmail_config:
+        modmail_config[guild_id] = DEFAULT_MODMAIL_CONFIG.copy()
+    
+    modmail_config[guild_id]['category_id'] = categorie.id
+    modmail_config[guild_id]['log_channel_id'] = logs.id
+    modmail_config[guild_id]['transcript_channel_id'] = transcripts.id
     
     embed = discord.Embed(
-        title=f"🎫 Tickets ouverts ({len(guild_tickets)})",
-        color=discord.Color.blue()
+        title="✅ ModMail configuré !",
+        color=discord.Color.green()
     )
-    
-    for user_id, data in guild_tickets:
-        user = bot.get_user(user_id)
-        channel = interaction.guild.get_channel(data['channel_id'])
-        
-        if user and channel:
-            msg_count = len(data['messages'])
-            embed.add_field(
-                name=f"👤 {user.name}",
-                value=f"Salon: {channel.mention}\nMessages: {msg_count}",
-                inline=False
-            )
+    embed.add_field(name="Catégorie", value=categorie.mention, inline=False)
+    embed.add_field(name="Logs", value=logs.mention, inline=True)
+    embed.add_field(name="Transcripts", value=transcripts.mention, inline=True)
+    embed.set_footer(text="Les utilisateurs peuvent maintenant vous contacter en DM !")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="closeticket", description="[STAFF] Fermer le ticket actuel")
-async def close_ticket_command(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_channels:
+@bot.tree.command(name="modmail_blacklist", description="[ADMIN] Bloquer/Débloquer un utilisateur du ModMail")
+@app_commands.describe(utilisateur="L'utilisateur à bloquer/débloquer")
+async def modmail_blacklist_cmd(interaction: discord.Interaction, utilisateur: discord.User):
+    if not interaction.user.guild_permissions.moderate_members:
         await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
         return
     
-    # Vérifier si c'est un salon de ticket
+    if utilisateur.id in modmail_blacklist:
+        modmail_blacklist.remove(utilisateur.id)
+        await interaction.response.send_message(f"✅ {utilisateur.mention} peut à nouveau utiliser le ModMail", ephemeral=True)
+    else:
+        modmail_blacklist.add(utilisateur.id)
+        await interaction.response.send_message(f"🚫 {utilisateur.mention} ne peut plus utiliser le ModMail", ephemeral=True)
+
+@bot.tree.command(name="modmail_stats", description="Voir les statistiques ModMail")
+async def modmail_stats(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    guild_tickets = [t for t in modmail_tickets.values() if t['guild_id'] == interaction.guild.id]
+    
+    embed = discord.Embed(
+        title="📊 Statistiques ModMail",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Tickets ouverts", value=str(len(guild_tickets)), inline=True)
+    embed.add_field(name="Tickets total", value=str(ticket_counter.get(interaction.guild.id, 0)), inline=True)
+    
+    # Par catégorie
+    categories = {}
+    for ticket in guild_tickets:
+        cat = ticket.get('category', 'Autre')
+        categories[cat] = categories.get(cat, 0) + 1
+    
+    if categories:
+        cat_text = "\n".join([f"{k}: {v}" for k, v in categories.items()])
+        embed.add_field(name="Par catégorie", value=cat_text, inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="modmail_config", description="[ADMIN] Configurer les options ModMail")
+@app_commands.describe(
+    anonymous="Masquer l'identité du staff (Oui/Non)",
+    cooldown="Temps entre deux tickets (secondes)",
+    ping_role="Rôle à ping pour nouveaux tickets"
+)
+async def modmail_configure(
+    interaction: discord.Interaction,
+    anonymous: bool = None,
+    cooldown: int = None,
+    ping_role: discord.Role = None
+):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    guild_id = interaction.guild.id
+    
+    if guild_id not in modmail_config:
+        modmail_config[guild_id] = DEFAULT_MODMAIL_CONFIG.copy()
+    
+    changes = []
+    
+    if anonymous is not None:
+        modmail_config[guild_id]['anonymous_staff'] = anonymous
+        changes.append(f"Staff anonyme: {'Oui' if anonymous else 'Non'}")
+    
+    if cooldown is not None:
+        modmail_config[guild_id]['cooldown_seconds'] = cooldown
+        changes.append(f"Cooldown: {cooldown}s")
+    
+    if ping_role is not None:
+        modmail_config[guild_id]['ping_role_id'] = ping_role.id
+        changes.append(f"Rôle ping: {ping_role.mention}")
+    
+    if changes:
+        embed = discord.Embed(
+            title="✅ Configuration mise à jour",
+            description="\n".join(changes),
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Aucun changement spécifié", ephemeral=True)
+
+@bot.tree.command(name="close", description="[STAFF] Fermer le ticket actuel")
+async def close_ticket_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    # Trouver le ticket
     ticket_user_id = None
-    for user_id, ticket_data in tickets.items():
-        if ticket_data['channel_id'] == interaction.channel.id:
+    for user_id, data in modmail_tickets.items():
+        if data['channel_id'] == interaction.channel.id:
             ticket_user_id = user_id
             break
     
@@ -432,781 +534,325 @@ async def close_ticket_command(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Ce n'est pas un salon de ticket !", ephemeral=True)
         return
     
-    # Utiliser la vue de confirmation
-    view = TicketCloseConfirmView(interaction.channel, ticket_user_id)
-    await interaction.response.send_message("⚠️ Voulez-vous vraiment fermer ce ticket ?", view=view, ephemeral=True)
+    view = CloseConfirmView(interaction.channel, ticket_user_id, interaction.guild.id)
+    await interaction.response.send_message("⚠️ Fermer ce ticket ?", view=view, ephemeral=True)
 
-# ========== SYSTÈME AUTOMOD - DÉTECTION ==========
-
-def is_immune(member, channel, guild_id):
-    """Vérifie si un membre/salon est immunisé"""
-    config = automod_config.get(guild_id, {})
-    
-    if member.guild_permissions.administrator:
-        return True
-    
-    if channel.id in config.get('immune_channels', []):
-        return True
-    
-    for role in member.roles:
-        if role.id in config.get('immune_roles', []):
-            return True
-    
-    return False
-
-def check_spam(user_id, guild_id):
-    """Détecte le spam"""
-    config = automod_config.get(guild_id, {}).get('anti_spam', {})
-    if not config.get('enabled'):
-        return False
-    
-    tracker = spam_tracker[user_id]
-    now = datetime.now()
-    
-    if (now - tracker['last_time']).seconds < config['timeframe']:
-        tracker['count'] += 1
-    else:
-        tracker['count'] = 1
-        tracker['last_time'] = now
-    
-    return tracker['count'] > config['max_messages']
-
-def check_mentions(message, guild_id):
-    """Détecte trop de mentions"""
-    config = automod_config.get(guild_id, {}).get('anti_mention', {})
-    if not config.get('enabled'):
-        return False
-    
-    total_mentions = len(message.mentions) + len(message.role_mentions)
-    if message.mention_everyone:
-        total_mentions += 10  # Pénalité pour @everyone
-    
-    return total_mentions > config['max_mentions']
-
-def check_duplicate(user_id, message, guild_id):
-    """Détecte les messages dupliqués"""
-    config = automod_config.get(guild_id, {}).get('anti_duplicate', {})
-    if not config.get('enabled'):
-        return False
-    
-    history = message_history[user_id]
-    history.append(message.content.lower())
-    
-    if len(history) > 10:
-        history.pop(0)
-    
-    duplicates = history.count(message.content.lower())
-    return duplicates > config['max_duplicates']
-
-def check_flood(message, guild_id):
-    """Détecte le flood de caractères"""
-    config = automod_config.get(guild_id, {}).get('anti_flood', {})
-    if not config.get('enabled'):
-        return False
-    
-    content = message.content
-    max_repeat = config['max_chars_repeat']
-    
-    for i in range(len(content) - max_repeat):
-        if len(set(content[i:i+max_repeat])) == 1:
-            return True
-    
-    return False
-
-def check_caps(message, guild_id):
-    """Détecte l'excès de majuscules"""
-    config = automod_config.get(guild_id, {}).get('anti_caps', {})
-    if not config.get('enabled') or len(message.content) < 10:
-        return False
-    
-    caps_count = sum(1 for c in message.content if c.isupper())
-    total_letters = sum(1 for c in message.content if c.isalpha())
-    
-    if total_letters == 0:
-        return False
-    
-    caps_percent = (caps_count / total_letters) * 100
-    return caps_percent > config['caps_percent']
-
-def check_emoji_spam(message, guild_id):
-    """Détecte le spam d'emojis"""
-    config = automod_config.get(guild_id, {}).get('anti_emoji_spam', {})
-    if not config.get('enabled'):
-        return False
-    
-    emoji_count = len(re.findall(r'<:\w+:\d+>|[\U0001F600-\U0001F64F]', message.content))
-    return emoji_count > config['max_emojis']
-
-def check_bad_words(message, guild_id):
-    """Filtre les insultes et mots interdits"""
-    content = message.content.lower()
-    
-    # Insultes
-    config_insults = automod_config.get(guild_id, {}).get('filter_insults', {})
-    if config_insults.get('enabled'):
-        for word in INSULTS + config_insults.get('words', []):
-            if word in content:
-                return 'insult'
-    
-    # Propos haineux
-    config_slurs = automod_config.get(guild_id, {}).get('filter_slurs', {})
-    if config_slurs.get('enabled'):
-        for word in SLURS:
-            if word in content:
-                return 'slur'
-    
-    # NSFW
-    config_nsfw = automod_config.get(guild_id, {}).get('filter_nsfw', {})
-    if config_nsfw.get('enabled'):
-        for word in NSFW_WORDS:
-            if word in content:
-                return 'nsfw'
-    
-    # Violence
-    config_violence = automod_config.get(guild_id, {}).get('filter_violence', {})
-    if config_violence.get('enabled'):
-        for word in VIOLENCE_WORDS:
-            if word in content:
-                return 'violence'
-    
-    return None
-
-def check_links(message, guild_id):
-    """Vérifie les liens suspects"""
-    content = message.content.lower()
-    
-    # Discord links
-    config_discord = automod_config.get(guild_id, {}).get('anti_discord_links', {})
-    if config_discord.get('enabled'):
-        if 'discord.gg/' in content or 'discord.com/invite/' in content:
-            return 'discord_link'
-    
-    # Scam
-    config_scam = automod_config.get(guild_id, {}).get('anti_scam', {})
-    if config_scam.get('enabled'):
-        for pattern in SCAM_PATTERNS:
-            if re.search(pattern, content):
-                return 'scam'
-    
-    # Liens suspects
-    config_suspicious = automod_config.get(guild_id, {}).get('anti_suspicious_links', {})
-    if config_suspicious.get('enabled'):
-        suspicious = ['bit.ly', 'tinyurl', 'grabify', 'iplogger']
-        for susp in suspicious:
-            if susp in content:
-                return 'suspicious_link'
-    
-    return None
-
-async def log_automod_action(guild, user, reason, action, message=None):
-    """Log les actions de l'AutoMod"""
-    config = automod_config.get(guild.id, {}).get('log_automod', {})
-    if not config.get('enabled') or not config.get('channel_id'):
-        return
-    
-    channel = guild.get_channel(config['channel_id'])
-    if not channel:
-        return
-    
-    embed = discord.Embed(
-        title="🤖 AutoMod - Action automatique",
-        color=discord.Color.orange(),
-        timestamp=datetime.now()
-    )
-    
-    embed.add_field(name="Membre", value=f"{user.mention} ({user.id})", inline=True)
-    embed.add_field(name="Raison", value=reason, inline=True)
-    embed.add_field(name="Action", value=action, inline=True)
-    
-    if message:
-        embed.add_field(name="Message", value=message.content[:100], inline=False)
-        embed.add_field(name="Salon", value=message.channel.mention, inline=True)
-    
-    embed.set_thumbnail(url=user.display_avatar.url)
-    
-    await channel.send(embed=embed)
-
-async def apply_sanction(member, guild_id, reason):
-    """Applique une sanction selon les infractions"""
-    config = automod_config.get(guild_id, {}).get('auto_sanctions', {})
-    if not config.get('enabled'):
-        return None
-    
-    user_infractions[member.id]['total'] += 1
-    infractions = user_infractions[member.id]['total']
-    
-    action = None
-    
-    if infractions >= config['ban_threshold']:
-        try:
-            await member.ban(reason=f"AutoMod: {reason} ({infractions} infractions)")
-            action = "🔨 BAN"
-        except:
-            pass
-    
-    elif infractions >= config['kick_threshold']:
-        try:
-            await member.kick(reason=f"AutoMod: {reason} ({infractions} infractions)")
-            action = "👢 KICK"
-        except:
-            pass
-    
-    elif infractions >= config['mute_threshold']:
-        try:
-            await member.timeout(timedelta(hours=1), reason=f"AutoMod: {reason}")
-            action = "🔇 TIMEOUT 1H"
-        except:
-            pass
-    
-    elif infractions >= config['warn_threshold']:
-        if member.id not in warnings:
-            warnings[member.id] = []
-        
-        warnings[member.id].append({
-            'raison': f"AutoMod: {reason}",
-            'moderateur': 'AutoMod',
-            'date': datetime.now().strftime("%d/%m/%Y %H:%M")
-        })
-        action = "⚠️ WARN"
-    
-    return action
-
-@bot.event
-async def on_message(message):
-    if message.author.bot or not message.guild:
-        return
-    
-    guild_id = message.guild.id
-    
-    # Vérifier si AutoMod est activé
-    if guild_id not in automod_config or not automod_config[guild_id]['enabled']:
-        await bot.process_commands(message)
-        return
-    
-    # Vérifier immunité
-    if is_immune(message.author, message.channel, guild_id):
-        await bot.process_commands(message)
-        return
-    
-    should_delete = False
-    reason = None
-    
-                # SPAM
-                if check_spam(message.author.id, guild_id):
-                    should_delete = True
-                    reason = "Spam de messages"
-                
-                # MENTIONS
-                elif check_mentions(message, guild_id):
-                    should_delete = True
-                    reason = "Trop de mentions"
-                
-                # DUPLICATE
-                elif check_duplicate(message.author.id, message, guild_id):
-                    should_delete = True
-                    reason = "Messages dupliqués"
-                
-                # FLOOD
-                elif check_flood(message, guild_id):
-                    should_delete = True
-                    reason = "Flood de caractères"
-                
-                # CAPS
-                elif check_caps(message, guild_id):
-                    should_delete = True
-                    reason = "Trop de majuscules"
-                
-                # EMOJI SPAM
-                elif check_emoji_spam(message, guild_id):
-                    should_delete = True
-                    reason = "Spam d'emojis"
-                
-                # MOTS INTERDITS
-                bad_word_type = check_bad_words(message, guild_id)
-                if bad_word_type:
-                    should_delete = True
-                    reasons_map = {
-                        'insult': 'Insulte',
-                        'slur': 'Propos haineux',
-                        'nsfw': 'Contenu NSFW',
-                        'violence': 'Propos violent'
-                    }
-                    reason = reasons_map.get(bad_word_type, 'Langage inapproprié')
-                    
-                    # Ban immédiat pour propos haineux
-                    if bad_word_type == 'slur':
-                        try:
-                            await message.author.ban(reason="AutoMod: Propos haineux")
-                            await log_automod_action(message.guild, message.author, "Propos haineux", "BAN IMMÉDIAT", message)
-                            await message.delete()
-                            return
-                        except:
-                            pass
-                
-                # LIENS
-                link_type = check_links(message, guild_id)
-                if link_type:
-                    should_delete = True
-                    reasons_map = {
-                        'discord_link': 'Lien Discord non autorisé',
-                        'scam': 'Tentative de scam',
-                        'suspicious_link': 'Lien suspect'
-                    }
-                    reason = reasons_map.get(link_type, 'Lien interdit')
-                    
-                    # Ban pour scam
-                    if link_type == 'scam':
-                        try:
-                            await message.author.ban(reason="AutoMod: Tentative de scam")
-                            await log_automod_action(message.guild, message.author, "Tentative de scam", "BAN IMMÉDIAT", message)
-                            await message.delete()
-                            return
-                        except:
-                            pass
-                
-                # Si violation détectée
-                if should_delete and reason:
-                    try:
-                        await message.delete()
-                        
-                        # Appliquer sanction
-                        action = await apply_sanction(message.author, guild_id, reason)
-                        
-                        # Log
-                        await log_automod_action(message.guild, message.author, reason, action or "Message supprimé", message)
-                        
-                        # Notifier l'utilisateur
-                        try:
-                            embed = discord.Embed(
-                                title="⚠️ Message supprimé par AutoMod",
-                                description=f"**Raison:** {reason}",
-                                color=discord.Color.red()
-                            )
-                            if action:
-                                embed.add_field(name="Action", value=action, inline=False)
-                            
-                            await message.author.send(embed=embed)
-                        except:
-                            pass
-                    
-                    except:
-                        pass
-    
-    # TOUJOURS traiter les commandes à la fin
-    await bot.process_commands(message)
-
-@bot.event
-async def on_member_join(member):
-    guild_id = member.guild.id
-    
-    # Vérifier âge du compte
-    if guild_id in automod_config:
-        config_age = automod_config[guild_id].get('account_age', {})
-        if config_age.get('enabled'):
-            account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
-            
-            if account_age < config_age['min_days']:
-                try:
-                    await member.kick(reason=f"AutoMod: Compte trop récent ({account_age} jours)")
-                    await log_automod_action(member.guild, member, f"Compte trop récent ({account_age} jours)", "KICK AUTO")
-                    return
-                except:
-                    pass
-    
-    # Message DM de bienvenue
-    if guild_id in automod_config:
-        config_dm = automod_config[guild_id].get('welcome_dm', {})
-        if config_dm.get('enabled'):
-            try:
-                embed = discord.Embed(
-                    title=f"Bienvenue sur {member.guild.name} !",
-                    description=config_dm.get('message', 'Bienvenue !'),
-                    color=discord.Color.green()
-                )
-                await member.send(embed=embed)
-            except:
-                pass
-    
-    # Rôle automatique
-    if guild_id in automod_config:
-        config_role = automod_config[guild_id].get('auto_role', {})
-        if config_role.get('enabled') and config_role.get('role_id'):
-            role = member.guild.get_role(config_role['role_id'])
-            if role:
-                try:
-                    await member.add_roles(role)
-                except:
-                    pass
-    
-    # Logs
-    if guild_id in automod_config:
-        config_logs = automod_config[guild_id].get('log_joins', {})
-        if config_logs.get('enabled') and config_logs.get('channel_id'):
-            channel = member.guild.get_channel(config_logs['channel_id'])
-            if channel:
-                embed = discord.Embed(
-                    title="👋 Nouveau membre",
-                    color=discord.Color.green(),
-                    timestamp=datetime.now()
-                )
-                embed.add_field(name="Membre", value=f"{member.mention} ({member.id})", inline=False)
-                
-                account_age = (datetime.now() - member.created_at.replace(tzinfo=None)).days
-                embed.add_field(name="Âge du compte", value=f"{account_age} jours", inline=True)
-                embed.add_field(name="Total membres", value=member.guild.member_count, inline=True)
-                
-                embed.set_thumbnail(url=member.display_avatar.url)
-                await channel.send(embed=embed)
-    
-    # Bienvenue dans le salon configuré
-    config = config_serveur.get(guild_id, {})
-    channel_id = config.get('salon_bienvenue')
-    
-    if channel_id:
-        channel = member.guild.get_channel(channel_id)
-        if channel:
-            embed = discord.Embed(
-                title=f"Bienvenue {member.name} !",
-                description=f"Bienvenue sur **{member.guild.name}** !\nTu es le membre n°{member.guild.member_count}",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            await channel.send(embed=embed)
-
-@bot.event
-async def on_message_delete(message):
-    if message.author.bot or not message.guild:
-        return
-    
-    guild_id = message.guild.id
-    
-    if guild_id in automod_config:
-        config = automod_config[guild_id].get('log_deleted', {})
-        if config.get('enabled') and config.get('channel_id'):
-            channel = message.guild.get_channel(config['channel_id'])
-            if channel:
-                embed = discord.Embed(
-                    title="🗑️ Message supprimé",
-                    color=discord.Color.red(),
-                    timestamp=datetime.now()
-                )
-                
-                embed.add_field(name="Auteur", value=f"{message.author.mention}", inline=True)
-                embed.add_field(name="Salon", value=message.channel.mention, inline=True)
-                embed.add_field(name="Contenu", value=message.content[:1000] or "*[Aucun contenu texte]*", inline=False)
-                
-                embed.set_footer(text=f"ID: {message.id}")
-                
-                await channel.send(embed=embed)
-
-@bot.event
-async def on_message_edit(before, after):
-    if before.author.bot or not before.guild or before.content == after.content:
-        return
-    
-    guild_id = before.guild.id
-    
-    if guild_id in automod_config:
-        config = automod_config[guild_id].get('log_edited', {})
-        if config.get('enabled') and config.get('channel_id'):
-            channel = before.guild.get_channel(config['channel_id'])
-            if channel:
-                embed = discord.Embed(
-                    title="✏️ Message édité",
-                    color=discord.Color.blue(),
-                    timestamp=datetime.now()
-                )
-                
-                embed.add_field(name="Auteur", value=f"{before.author.mention}", inline=True)
-                embed.add_field(name="Salon", value=before.channel.mention, inline=True)
-                embed.add_field(name="Avant", value=before.content[:500] or "*[Vide]*", inline=False)
-                embed.add_field(name="Après", value=after.content[:500] or "*[Vide]*", inline=False)
-                
-                embed.set_footer(text=f"ID: {before.id}")
-                
-                await channel.send(embed=embed)
-
-# ========== COMMANDES CONFIGURATION ==========
-
-@bot.tree.command(name="setlogchannel", description="[ADMIN] Définir le salon de logs AutoMod")
-@app_commands.describe(type_log="Type de log", salon="Le salon")
-@app_commands.choices(type_log=[
-    app_commands.Choice(name="Messages supprimés", value="deleted"),
-    app_commands.Choice(name="Messages édités", value="edited"),
-    app_commands.Choice(name="Arrivées/Départs", value="joins"),
-    app_commands.Choice(name="Actions AutoMod", value="automod")
-])
-async def set_log_channel(interaction: discord.Interaction, type_log: str, salon: discord.TextChannel):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-        return
-    
-    guild_id = interaction.guild.id
-    if guild_id not in automod_config:
-        automod_config[guild_id] = DEFAULT_AUTOMOD.copy()
-    
-    log_types = {
-        'deleted': 'log_deleted',
-        'edited': 'log_edited',
-        'joins': 'log_joins',
-        'automod': 'log_automod'
-    }
-    
-    config_key = log_types[type_log]
-    automod_config[guild_id][config_key]['channel_id'] = salon.id
-    automod_config[guild_id][config_key]['enabled'] = True
-    
-    await interaction.response.send_message(f"✅ Salon de logs **{type_log}** défini sur {salon.mention}", ephemeral=True)
-
-@bot.tree.command(name="statsautomod", description="Voir les statistiques AutoMod")
-async def stats_automod(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    
-    if guild_id not in automod_config:
-        await interaction.response.send_message("❌ AutoMod non configuré !", ephemeral=True)
-        return
-    
-    # Compter les modules actifs
-    config = automod_config[guild_id]
-    active = sum(1 for key, val in config.items() if isinstance(val, dict) and val.get('enabled', False))
-    
-    embed = discord.Embed(
-        title="📊 Statistiques AutoMod",
-        color=discord.Color.blue()
-    )
-    
-    status = "🟢 Actif" if config['enabled'] else "🔴 Inactif"
-    embed.add_field(name="Statut global", value=status, inline=True)
-    embed.add_field(name="Modules actifs", value=f"{active}", inline=True)
-    
-    # Top utilisateurs avec infractions
-    top_users = sorted(user_infractions.items(), key=lambda x: x[1]['total'], reverse=True)[:5]
-    
-    if top_users:
-        top_text = ""
-        for user_id, data in top_users:
-            member = interaction.guild.get_member(user_id)
-            if member:
-                top_text += f"{member.mention}: {data['total']} infractions\n"
-        
-        if top_text:
-            embed.add_field(name="Top infractions", value=top_text, inline=False)
-    
-    await interaction.response.send_message(embed=embed)
-
-# ========== COMMANDES MODÉRATION (inchangées) ==========
-
-async def log_action(guild, action_type, moderateur, cible, raison):
-    config = config_serveur.get(guild.id, {})
-    logs_channel_id = config.get('salon_logs')
-    
-    if not logs_channel_id:
-        return
-    
-    logs_channel = guild.get_channel(logs_channel_id)
-    if not logs_channel:
-        return
-    
-    colors = {
-        'warn': discord.Color.orange(),
-        'kick': discord.Color.red(),
-        'ban': discord.Color.dark_red(),
-        'timeout': discord.Color.yellow(),
-        'unmute': discord.Color.green(),
-        'unwarn': discord.Color.blue()
-    }
-    
-    embed = discord.Embed(
-        title=f"🔨 Action: {action_type.upper()}",
-        color=colors.get(action_type, discord.Color.gray()),
-        timestamp=datetime.now()
-    )
-    
-    embed.add_field(name="Membre", value=f"{cible.mention} ({cible.id})", inline=True)
-    embed.add_field(name="Modérateur", value=f"{moderateur.mention}", inline=True)
-    embed.add_field(name="Raison", value=raison, inline=False)
-    embed.set_thumbnail(url=cible.display_avatar.url)
-    
-    await logs_channel.send(embed=embed)
-
-@bot.tree.command(name="warn", description="Avertir un membre")
-@app_commands.describe(membre="Le membre à avertir", raison="La raison")
-async def warn(interaction: discord.Interaction, membre: discord.Member, raison: str):
-    if not interaction.user.guild_permissions.moderate_members:
-        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-        return
-    
-    if membre.id not in warnings:
-        warnings[membre.id] = []
-    
-    warnings[membre.id].append({
-        'raison': raison,
-        'moderateur': interaction.user.name,
-        'date': datetime.now().strftime("%d/%m/%Y %H:%M")
-    })
-    
-    warn_count = len(warnings[membre.id])
-    
-    embed = discord.Embed(title="⚠️ Avertissement", color=discord.Color.orange())
-    embed.add_field(name="Membre", value=membre.mention, inline=True)
-    embed.add_field(name="Raison", value=raison, inline=False)
-    embed.add_field(name="Total warns", value=f"{warn_count}", inline=True)
-    
-    await interaction.response.send_message(embed=embed)
-    await log_action(interaction.guild, 'warn', interaction.user, membre, raison)
-
-@bot.tree.command(name="warns", description="Voir les warns d'un membre")
-@app_commands.describe(membre="Le membre")
-async def see_warns(interaction: discord.Interaction, membre: discord.Member = None):
-    target = membre or interaction.user
-    
-    if target.id not in warnings or len(warnings[target.id]) == 0:
-        await interaction.response.send_message(f"✅ Aucun warn", ephemeral=True)
-        return
-    
-    embed = discord.Embed(title=f"⚠️ Warns de {target.name}", color=discord.Color.orange())
-    
-    for i, warn in enumerate(warnings[target.id], 1):
-        embed.add_field(
-            name=f"Warn #{i} - {warn['date']}",
-            value=f"**Raison:** {warn['raison']}\n**Par:** {warn['moderateur']}",
-            inline=False
-        )
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="kick", description="Expulser un membre")
-@app_commands.describe(membre="Le membre", raison="La raison")
-async def kick(interaction: discord.Interaction, membre: discord.Member, raison: str = "Aucune raison"):
-    if not interaction.user.guild_permissions.kick_members:
-        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-        return
-    
-    try:
-        await membre.kick(reason=raison)
-        await interaction.response.send_message(f"✅ {membre.mention} expulsé")
-        await log_action(interaction.guild, 'kick', interaction.user, membre, raison)
-    except:
-        await interaction.response.send_message("❌ Erreur", ephemeral=True)
-
-@bot.tree.command(name="ban", description="Bannir un membre")
-@app_commands.describe(membre="Le membre", raison="La raison")
-async def ban(interaction: discord.Interaction, membre: discord.Member, raison: str = "Aucune raison"):
-    if not interaction.user.guild_permissions.ban_members:
-        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-        return
-    
-    try:
-        await membre.ban(reason=raison)
-        await interaction.response.send_message(f"🔨 {membre.mention} banni")
-        await log_action(interaction.guild, 'ban', interaction.user, membre, raison)
-    except:
-        await interaction.response.send_message("❌ Erreur", ephemeral=True)
-
-@bot.tree.command(name="timeout", description="Timeout un membre")
-@app_commands.describe(membre="Le membre", duree="Durée en minutes", raison="La raison")
-async def timeout(interaction: discord.Interaction, membre: discord.Member, duree: int, raison: str = "Aucune raison"):
-    if not interaction.user.guild_permissions.moderate_members:
-        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-        return
-    
-    try:
-        await membre.timeout(timedelta(minutes=duree), reason=raison)
-        await interaction.response.send_message(f"⏰ {membre.mention} timeout {duree}min")
-        await log_action(interaction.guild, 'timeout', interaction.user, membre, raison)
-    except:
-        await interaction.response.send_message("❌ Erreur", ephemeral=True)
-
-@bot.tree.command(name="clear", description="Supprimer des messages")
-@app_commands.describe(nombre="Nombre de messages")
-async def clear(interaction: discord.Interaction, nombre: int):
+@bot.tree.command(name="modmail_list", description="[STAFF] Voir tous les tickets ouverts")
+async def list_tickets(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
         return
     
-    await interaction.response.defer(ephemeral=True)
-    deleted = await interaction.channel.purge(limit=nombre)
-    await interaction.followup.send(f"✅ {len(deleted)} messages supprimés", ephemeral=True)
-
-# ========== ROBLOX (inchangé) ==========
-
-@bot.tree.command(name="lier_roblox", description="Lier ton compte Roblox")
-@app_commands.describe(nom_utilisateur="Ton nom Roblox")
-async def lier_roblox(interaction: discord.Interaction, nom_utilisateur: str):
-    await interaction.response.defer()
+    guild_tickets = [(uid, data) for uid, data in modmail_tickets.items() if data['guild_id'] == interaction.guild.id]
     
-    try:
-        response = requests.get(f"https://users.roblox.com/v1/users/search?keyword={nom_utilisateur}&limit=1")
-        data = response.json()
+    if not guild_tickets:
+        await interaction.response.send_message("✅ Aucun ticket ouvert", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title=f"🎫 Tickets ouverts ({len(guild_tickets)})",
+        color=discord.Color.blue()
+    )
+    
+    for user_id, data in guild_tickets[:10]:  # Max 10
+        user = bot.get_user(user_id)
+        channel = interaction.guild.get_channel(data['channel_id'])
         
-        if not data.get('data'):
-            await interaction.followup.send(f"❌ Utilisateur introuvable")
+        if user and channel:
+            priority_emoji = {'basse': '🟢', 'normale': '🟡', 'haute': '🔴'}
+            priority = data.get('priority', 'normale')
+            
+            value = f"Salon: {channel.mention}\n"
+            value += f"Priorité: {priority_emoji.get(priority, '🟡')} {priority}\n"
+            value += f"Catégorie: {data.get('category', 'N/A')}"
+            
+            embed.add_field(name=f"👤 {user.name}", value=value, inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ========== GESTION DES MESSAGES ==========
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    
+    # === GESTION DES DM ===
+    if isinstance(message.channel, discord.DMChannel):
+        user = message.author
+        
+        # Vérifier blacklist
+        if is_blacklisted(user.id):
+            await message.channel.send("🚫 Vous êtes bloqué du système ModMail.")
             return
         
-        roblox_user = data['data'][0]
-        roblox_id = roblox_user['id']
-        roblox_name = roblox_user['name']
+        # Ticket existant
+        if user.id in modmail_tickets:
+            ticket_data = modmail_tickets[user.id]
+            guild = bot.get_guild(ticket_data['guild_id'])
+            
+            if guild:
+                channel = guild.get_channel(ticket_data['channel_id'])
+                
+                if channel:
+                    # Vérifier mots interdits
+                    if check_bad_words(message.content, guild.id):
+                        await message.channel.send("⚠️ Votre message contient des mots interdits et n'a pas été envoyé.")
+                        return
+                    
+                    # Envoyer dans le salon
+                    embed = discord.Embed(
+                        description=message.content,
+                        color=discord.Color.blue(),
+                        timestamp=datetime.now()
+                    )
+                    embed.set_author(name=user.name, icon_url=user.display_avatar.url)
+                    
+                    if message.attachments:
+                        embed.set_image(url=message.attachments[0].url)
+                    
+                    await channel.send(embed=embed)
+                    
+                    # Sauvegarder
+                    ticket_data['messages'].append({
+                        'author': user.name,
+                        'content': message.content,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+                    await message.add_reaction('✅')
+                    return
         
-        roblox_links[interaction.user.id] = {
-            'roblox_id': roblox_id,
-            'roblox_name': roblox_name
-        }
+        # Nouveau ticket
+        # Trouver serveur commun
+        mutual_guilds = [g for g in bot.guilds if g.get_member(user.id)]
         
-        embed = discord.Embed(title="✅ Compte lié !", description=f"Lié à **{roblox_name}**", color=discord.Color.green())
-        embed.set_thumbnail(url=f"https://www.roblox.com/headshot-thumbnail/image?userId={roblox_id}&width=150&height=150&format=png")
+        if not mutual_guilds:
+            await message.channel.send("❌ Nous ne partageons aucun serveur !")
+            return
         
-        await interaction.followup.send(embed=embed)
-    except:
-        await interaction.followup.send("❌ Erreur")
-
-@bot.tree.command(name="userinfo", description="Infos sur un membre")
-@app_commands.describe(membre="Le membre")
-async def userinfo(interaction: discord.Interaction, membre: discord.Member = None):
-    user = membre or interaction.user
+        # Prendre le premier avec config
+        target_guild = None
+        for guild in mutual_guilds:
+            if guild.id in modmail_config and modmail_config[guild.id].get('category_id'):
+                target_guild = guild
+                break
+        
+        if not target_guild:
+            await message.channel.send("❌ Le ModMail n'est pas configuré sur ce serveur !\n\nContactez un administrateur.")
+            return
+        
+        config = modmail_config[target_guild.id]
+        
+        # Vérifier cooldown
+        cooldown = check_cooldown(user.id)
+        if cooldown > 0:
+            await message.channel.send(f"⏳ Veuillez attendre encore {cooldown} secondes avant de créer un nouveau ticket.")
+            return
+        
+        # Vérifier max tickets
+        user_tickets = [t for t in modmail_tickets.values() if t['guild_id'] == target_guild.id]
+        if len(user_tickets) >= config.get('max_tickets_per_user', 1):
+            await message.channel.send("❌ Vous avez déjà un ticket ouvert. Fermez-le avant d'en créer un nouveau.")
+            return
+        
+        # Demander catégorie
+        embed = discord.Embed(
+            title="🎫 Nouveau ticket ModMail",
+            description=f"Sélectionnez une catégorie pour votre ticket sur **{target_guild.name}**",
+            color=discord.Color.blue()
+        )
+        
+        view = TicketCategorySelectView(user, target_guild)
+        msg = await message.channel.send(embed=embed, view=view)
+        
+        await view.wait()
+        
+        if not view.category:
+            await message.channel.send("❌ Temps expiré ou annulé.")
+            return
+        
+        # Créer le ticket
+        try:
+            category = target_guild.get_channel(config['category_id'])
+            
+            if not category:
+                await message.channel.send("❌ Catégorie introuvable !")
+                return
+            
+            # Incrémenter compteur
+            ticket_counter[target_guild.id] += 1
+            ticket_num = ticket_counter[target_guild.id]
+            
+            channel_name = f"modmail-{user.name}-{ticket_num}".lower().replace(" ", "-")[:50]
+            
+            ticket_channel = await category.create_text_channel(
+                name=channel_name,
+                topic=f"ModMail de {user.name} ({user.id}) - Ticket #{ticket_num}"
+            )
+            
+            # Permissions
+            await ticket_channel.set_permissions(target_guild.default_role, view_channel=False)
+            await ticket_channel.set_permissions(user, view_channel=True, send_messages=False, read_messages=True)
+            
+            # Permissions staff
+            for role in target_guild.roles:
+                if role.permissions.manage_messages or role.permissions.administrator:
+                    await ticket_channel.set_permissions(role, view_channel=True, send_messages=True)
+            
+            # Enregistrer
+            modmail_tickets[user.id] = {
+                'channel_id': ticket_channel.id,
+                'guild_id': target_guild.id,
+                'category': view.category,
+                'priority': 'normale',
+                'claimed_by': None,
+                'messages': [],
+                'tags': set(),
+                'created_at': datetime.now()
+            }
+            
+            # Cooldown
+            modmail_cooldowns[user.id] = datetime.now() + timedelta(seconds=config.get('cooldown_seconds', 300))
+            
+            # Infos utilisateur
+            member = target_guild.get_member(user.id)
+            
+            embed_ticket = discord.Embed(
+                title=f"🎫 Nouveau ticket ModMail #{ticket_num}",
+                description=f"**Catégorie:** {view.category}\n**Message initial:**\n{message.content}",
+                color=discord.Color.green(),
+                timestamp=datetime.now()
+            )
+            
+            # Infos user
+            embed_ticket.add_field(name="👤 Utilisateur", value=f"{user.mention}\n`{user.id}`", inline=True)
+            
+            if member:
+                account_age = (datetime.now() - user.created_at.replace(tzinfo=None)).days
+                join_age = (datetime.now() - member.joined_at.replace(tzinfo=None)).days
+                
+                embed_ticket.add_field(name="📅 Compte créé", value=f"Il y a {account_age} jours", inline=True)
+                embed_ticket.add_field(name="📅 Rejoint le", value=f"Il y a {join_age} jours", inline=True)
+                
+                if len(member.roles) > 1:
+                    roles = ", ".join([r.mention for r in member.roles[1:6]])
+                    embed_ticket.add_field(name="🎭 Rôles", value=roles, inline=False)
+            
+            embed_ticket.set_thumbnail(url=user.display_avatar.url)
+            embed_ticket.set_footer(text="Utilisez les boutons pour gérer ce ticket")
+            
+            view_control = TicketControlView(ticket_channel, user.id, target_guild.id)
+            await ticket_channel.send(embed=embed_ticket, view=view_control)
+            
+            # Ping role si configuré
+            ping_role_id = config.get('ping_role_id')
+            if ping_role_id:
+                role = target_guild.get_role(ping_role_id)
+                if role:
+                    await ticket_channel.send(f"{role.mention} Nouveau ticket !")
+            
+            # Message de bienvenue user
+            greeting = config.get('greeting_message', DEFAULT_MODMAIL_CONFIG['greeting_message'])
+            
+            embed_welcome = discord.Embed(
+                title="✅ Ticket créé !",
+                description=greeting,
+                color=discord.Color.green()
+            )
+            embed_welcome.add_field(name="Serveur", value=target_guild.name, inline=True)
+            embed_welcome.add_field(name="Catégorie", value=view.category, inline=True)
+            embed_welcome.add_field(name="Ticket", value=f"#{ticket_num}", inline=True)
+            embed_welcome.set_footer(text="Continuez la conversation ici, vos messages seront transmis au staff")
+            
+            await message.channel.send(embed=embed_welcome)
+            
+            # Log
+            log_channel_id = config.get('log_channel_id')
+            if log_channel_id:
+                log_channel = target_guild.get_channel(log_channel_id)
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="📨 Nouveau ticket ModMail",
+                        color=discord.Color.blue()
+                    )
+                    log_embed.add_field(name="Utilisateur", value=f"{user.mention}", inline=True)
+                    log_embed.add_field(name="Catégorie", value=view.category, inline=True)
+                    log_embed.add_field(name="Salon", value=ticket_channel.mention, inline=True)
+                    log_embed.timestamp = datetime.now()
+                    
+                    await log_channel.send(embed=log_embed)
+        
+        except Exception as e:
+            await message.channel.send(f"❌ Erreur: {str(e)}")
+        
+        return
     
-    embed = discord.Embed(title=f"Infos sur {user.name}", color=user.color)
-    embed.set_thumbnail(url=user.display_avatar.url)
-    embed.add_field(name="ID", value=user.id, inline=True)
-    embed.add_field(name="Créé le", value=user.created_at.strftime("%d/%m/%Y"), inline=True)
-    embed.add_field(name="Rejoint le", value=user.joined_at.strftime("%d/%m/%Y"), inline=True)
+    # === MESSAGES DANS LES SALONS DE TICKETS ===
+    if message.guild:
+        # Trouver le ticket
+        ticket_user_id = None
+        for user_id, data in modmail_tickets.items():
+            if data['channel_id'] == message.channel.id:
+                ticket_user_id = user_id
+                break
+        
+        if ticket_user_id:
+            user = bot.get_user(ticket_user_id)
+            
+            if user:
+                config = modmail_config.get(message.guild.id, {})
+                anonymous = config.get('anonymous_staff', False)
+                
+                embed = discord.Embed(
+                    description=message.content,
+                    color=discord.Color.green(),
+                    timestamp=datetime.now()
+                )
+                
+                if anonymous:
+                    embed.set_author(name="Équipe de modération", icon_url=message.guild.icon.url if message.guild.icon else None)
+                else:
+                    embed.set_author(name=f"{message.author.name} (Staff)", icon_url=message.author.display_avatar.url)
+                
+                embed.set_footer(text=message.guild.name, icon_url=message.guild.icon.url if message.guild.icon else None)
+                
+                if message.attachments:
+                    embed.set_image(url=message.attachments[0].url)
+                
+                try:
+                    await user.send(embed=embed)
+                    await message.add_reaction('✅')
+                    
+                    modmail_tickets[ticket_user_id]['messages'].append({
+                        'author': message.author.name,
+                        'content': message.content,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except:
+                    await message.channel.send("⚠️ Impossible d'envoyer le message (DM fermés ?)")
+            
+            return
     
-    if user.id in warnings and len(warnings[user.id]) > 0:
-        embed.add_field(name="⚠️ Warns", value=f"{len(warnings[user.id])}", inline=True)
-    
-    if user.id in user_infractions:
-        embed.add_field(name="Infractions AutoMod", value=f"{user_infractions[user.id]['total']}", inline=True)
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="serverinfo", description="Infos sur le serveur")
-async def serverinfo(interaction: discord.Interaction):
-    guild = interaction.guild
-    
-    embed = discord.Embed(title=f"Infos - {guild.name}", color=discord.Color.purple())
-    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
-    embed.add_field(name="Propriétaire", value=guild.owner.mention, inline=True)
-    embed.add_field(name="Membres", value=guild.member_count, inline=True)
-    embed.add_field(name="Créé le", value=guild.created_at.strftime("%d/%m/%Y"), inline=True)
-    
-    await interaction.response.send_message(embed=embed)
-
-# ========== ÉVÉNEMENTS ==========
+    await bot.process_commands(message)
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} connecté !')
+    print(f'{bot.user} est connecté et prêt !')
+    print(f'Bot ID: {bot.user.id}')
+    print(f'Serveurs: {len(bot.guilds)}')
     try:
         synced = await bot.tree.sync()
-        print(f'Synchronisé {len(synced)} commandes')
+        print(f'✅ Synchronisé {len(synced)} commandes slash')
     except Exception as e:
-        print(f'Erreur: {e}')
+        print(f'❌ Erreur de synchronisation: {e}')
 
 # Serveur web pour Render
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Bot Discord actif !"
+    return "✅ Bot ModMail actif !"
 
 def run_web():
     port = int(os.environ.get('PORT', 10000))
@@ -1219,7 +865,9 @@ def keep_alive():
 # Lance le bot
 TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
-    print("❌ Token Discord non trouvé !")
+    print("❌ ERREUR: Token Discord non trouvé dans les variables d'environnement !")
+    print("Assurez-vous d'avoir défini DISCORD_TOKEN sur Render")
 else:
+    print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
