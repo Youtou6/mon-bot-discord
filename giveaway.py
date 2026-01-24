@@ -131,7 +131,7 @@ class GiveawayConfigView(discord.ui.View):
         self.forbidden_role = None
         self.min_account_age = 0
         self.weighted_mode = False
-        self.booster_bonus = 1.0
+        self.booster_bonus = 1.5
         self.color = 0xF1C40F  # Or
         self.ping_role = None
         self.channel = None
@@ -139,7 +139,7 @@ class GiveawayConfigView(discord.ui.View):
     @discord.ui.button(label="✅ Lancer le Giveaway", style=discord.ButtonStyle.success, row=0)
     async def launch_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.channel:
-            await interaction.response.send_message("❌ Veuillez d'abord sélectionner un salon !", ephemeral=True)
+            await interaction.response.send_message("❌ Veuillez d'abord sélectionner un salon avec `/giveaway_setchannel` !\n\n💡 Ou utilisez `/giveaway_quick` pour créer rapidement.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -205,25 +205,22 @@ class GiveawayConfigView(discord.ui.View):
         # Lancer le countdown
         asyncio.create_task(giveaway_countdown(message.id, self.duration))
         
-        await interaction.followup.send(f"✅ Giveaway lancé avec succès dans {self.channel.mention} !", ephemeral=True)
+        await interaction.followup.send(f"✅ Giveaway lancé avec succès dans {self.channel.mention} !\n\n🔗 [Lien direct]({message.jump_url})", ephemeral=True)
         
         # Log
         await log_giveaway_action(interaction.guild, "🎁 Giveaway créé", self.creator, self.prize, message.jump_url)
     
-    @discord.ui.channel_select(placeholder="📍 Sélectionner le salon", row=1)
-    async def select_channel(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self.channel = select.values[0]
-        await interaction.response.send_message(f"✅ Salon sélectionné : {self.channel.mention}", ephemeral=True)
+    @discord.ui.button(label="📍 Sélectionner salon", style=discord.ButtonStyle.secondary, row=1)
+    async def select_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez la commande `/giveaway_setchannel` pour définir le salon !", ephemeral=True)
     
-    @discord.ui.role_select(placeholder="👔 Rôle requis (optionnel)", row=2)
-    async def select_required_role(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self.required_role = select.values[0].id
-        await interaction.response.send_message(f"✅ Rôle requis : {select.values[0].mention}", ephemeral=True)
+    @discord.ui.button(label="👔 Rôle requis", style=discord.ButtonStyle.secondary, row=2)
+    async def select_required_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez `/giveaway_setrole` pour définir un rôle requis !", ephemeral=True)
     
-    @discord.ui.role_select(placeholder="🔔 Rôle à ping (optionnel)", row=3)
-    async def select_ping_role(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self.ping_role = select.values[0].id
-        await interaction.response.send_message(f"✅ Rôle à ping : {select.values[0].mention}", ephemeral=True)
+    @discord.ui.button(label="🔔 Rôle à ping", style=discord.ButtonStyle.secondary, row=3)
+    async def select_ping_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez `/giveaway_setping` pour définir le rôle à ping !", ephemeral=True)
     
     @discord.ui.button(label="⚖️ Mode pondéré", style=discord.ButtonStyle.secondary, row=4)
     async def toggle_weighted(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -577,3 +574,156 @@ async def giveaway_list(interaction: discord.Interaction):
         )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="giveaway_quick", description="🚀 Créer un giveaway rapidement")
+@app_commands.describe(
+    salon="Salon où poster le giveaway",
+    prix="Le prix à gagner",
+    duree="Durée (ex: 2h, 1d, 30m)",
+    gagnants="Nombre de gagnants"
+)
+async def giveaway_quick(
+    interaction: discord.Interaction,
+    salon: discord.TextChannel,
+    prix: str,
+    duree: str,
+    gagnants: int = 1
+):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    # Parser la durée
+    duration_str = duree.lower()
+    duration_seconds = 0
+    
+    try:
+        import re
+        days = re.search(r'(\d+)d', duration_str)
+        hours = re.search(r'(\d+)h', duration_str)
+        minutes = re.search(r'(\d+)m', duration_str)
+        seconds = re.search(r'(\d+)s', duration_str)
+        
+        if days:
+            duration_seconds += int(days.group(1)) * 86400
+        if hours:
+            duration_seconds += int(hours.group(1)) * 3600
+        if minutes:
+            duration_seconds += int(minutes.group(1)) * 60
+        if seconds:
+            duration_seconds += int(seconds.group(1))
+        
+        if duration_seconds == 0:
+            await interaction.response.send_message("❌ Format de durée invalide !", ephemeral=True)
+            return
+    except:
+        await interaction.response.send_message("❌ Erreur de durée !", ephemeral=True)
+        return
+    
+    if gagnants < 1 or gagnants > 20:
+        await interaction.response.send_message("❌ Le nombre de gagnants doit être entre 1 et 20 !", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    # Créer le giveaway
+    end_time = datetime.now() + timedelta(seconds=duration_seconds)
+    
+    embed = discord.Embed(
+        title=f"🎁 {prix}",
+        description="Cliquez sur **Participer** pour tenter votre chance !",
+        color=0xF1C40F,
+        timestamp=end_time
+    )
+    
+    embed.add_field(name="🏆 Gagnants", value=f"{gagnants} personne{'s' if gagnants > 1 else ''}", inline=True)
+    embed.add_field(name="⏱️ Fin dans", value=format_duration(duration_seconds), inline=True)
+    embed.add_field(name="👥 Participants", value="0", inline=True)
+    
+    embed.set_footer(text=f"Créé par {interaction.user.name} • Se termine à", icon_url=interaction.user.display_avatar.url)
+    
+    view = GiveawayParticipateView()
+    
+    message = await salon.send(content="🎉 **NOUVEAU GIVEAWAY !**", embed=embed, view=view)
+    
+    # Sauvegarder
+    giveaways[message.id] = {
+        'prize': prix,
+        'description': "",
+        'winners': gagnants,
+        'end_time': end_time,
+        'creator_id': interaction.user.id,
+        'guild_id': interaction.guild.id,
+        'channel_id': salon.id,
+        'message_id': message.id,
+        'required_role': None,
+        'forbidden_role': None,
+        'min_account_age': 0,
+        'weighted_mode': False,
+        'booster_bonus': 1.5,
+        'active': True,
+        'paused': False
+    }
+    
+    # Countdown
+    asyncio.create_task(giveaway_countdown(message.id, duration_seconds))
+    
+    await interaction.followup.send(f"✅ Giveaway lancé dans {salon.mention} !\n\n🔗 [Voir le giveaway]({message.jump_url})", ephemeral=True)
+
+@bot.tree.command(name="giveaway_pause", description="⏸️ Mettre en pause un giveaway")
+@app_commands.describe(message_id="L'ID du message du giveaway")
+async def giveaway_pause(interaction: discord.Interaction, message_id: str):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    try:
+        msg_id = int(message_id)
+    except:
+        await interaction.response.send_message("❌ ID invalide", ephemeral=True)
+        return
+    
+    if msg_id not in giveaways:
+        await interaction.response.send_message("❌ Giveaway introuvable", ephemeral=True)
+        return
+    
+    giveaway = giveaways[msg_id]
+    giveaway['paused'] = not giveaway['paused']
+    
+    status = "en pause ⏸️" if giveaway['paused'] else "repris ▶️"
+    await interaction.response.send_message(f"✅ Giveaway {status}", ephemeral=True)
+
+@bot.tree.command(name="giveaway_delete", description="🗑️ Supprimer un giveaway")
+@app_commands.describe(message_id="L'ID du message du giveaway")
+async def giveaway_delete(interaction: discord.Interaction, message_id: str):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
+        return
+    
+    try:
+        msg_id = int(message_id)
+    except:
+        await interaction.response.send_message("❌ ID invalide", ephemeral=True)
+        return
+    
+    if msg_id not in giveaways:
+        await interaction.response.send_message("❌ Giveaway introuvable", ephemeral=True)
+        return
+    
+    giveaway = giveaways[msg_id]
+    
+    # Supprimer le message
+    try:
+        guild = bot.get_guild(giveaway['guild_id'])
+        channel = guild.get_channel(giveaway['channel_id'])
+        message = await channel.fetch_message(msg_id)
+        await message.delete()
+    except:
+        pass
+    
+    # Supprimer des données
+    del giveaways[msg_id]
+    if msg_id in giveaway_participants:
+        del giveaway_participants[msg_id]
+    
+    await interaction.response.send_message("✅ Giveaway supprimé", ephemeral=True)
