@@ -9,27 +9,10 @@ from flask import Flask
 from datetime import datetime, timedelta
 from collections import defaultdict
 import asyncio
-# ========== IMPORT DU SYSTÈME GIVEAWAY ==========
-import sys
-sys.path.append('.')
-
-# Le bot sera défini plus bas, donc on importe après
 
 # Configuration du bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
-# Configuration du bot
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# ========== CHARGER LE SYSTÈME GIVEAWAY ==========
-try:
-    with open('giveaway.py', 'r', encoding='utf-8') as f:
-        giveaway_code = f.read()
-        exec(giveaway_code, globals())
-    print("✅ Système Giveaway chargé avec succès !")
-except Exception as e:
-    print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
 
 # ========== STOCKAGE DES DONNÉES ==========
 modmail_tickets = {}  # {user_id: {'channel_id', 'guild_id', 'category', 'priority', 'claimed_by', 'messages', 'tags', 'created_at'}}
@@ -302,6 +285,26 @@ class SatisfactionView(discord.ui.View):
         await self.handle_rating(interaction, 5)
     
     async def handle_rating(self, interaction, rating):
+        # Ouvrir un modal pour le commentaire
+        modal = SatisfactionCommentModal(rating, self.user_id, self.guild_id)
+        await interaction.response.send_modal(modal)
+
+class SatisfactionCommentModal(discord.ui.Modal, title="Commentaire (optionnel)"):
+    def __init__(self, rating, user_id, guild_id):
+        super().__init__()
+        self.rating = rating
+        self.user_id = user_id
+        self.guild_id = guild_id
+    
+    comment = discord.ui.TextInput(
+        label="Votre avis sur le support",
+        style=discord.TextStyle.paragraph,
+        placeholder="Dites-nous ce que vous avez pensé... (optionnel)",
+        required=False,
+        max_length=500
+    )
+    
+    async def on_submit(self, interaction: discord.Interaction):
         config = modmail_config.get(self.guild_id, {})
         log_channel_id = config.get('log_channel_id')
         
@@ -312,16 +315,24 @@ class SatisfactionView(discord.ui.View):
                 if channel:
                     embed = discord.Embed(
                         title="⭐ Satisfaction utilisateur",
-                        description=f"Note: {'⭐' * rating} ({rating}/5)",
-                        color=discord.Color.gold()
+                        description=f"**Note:** {'⭐' * self.rating} ({self.rating}/5)",
+                        color=discord.Color.gold(),
+                        timestamp=datetime.now()
                     )
                     embed.add_field(name="Utilisateur", value=f"<@{self.user_id}>", inline=True)
-                    embed.set_footer(text=datetime.now().strftime("%d/%m/%Y %H:%M"))
+                    
+                    if self.comment.value:
+                        embed.add_field(name="💬 Commentaire", value=f"```{self.comment.value}```", inline=False)
+                    
+                    embed.set_footer(text=f"Évaluation du {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
                     
                     await channel.send(embed=embed)
         
-        await interaction.response.send_message(f"✅ Merci pour votre retour ! {'⭐' * rating}", ephemeral=True)
-        self.stop()
+        thank_msg = f"✅ Merci pour votre retour ! {'⭐' * self.rating}"
+        if self.comment.value:
+            thank_msg += "\n\n💬 Votre commentaire a bien été enregistré."
+        
+        await interaction.response.send_message(thank_msg, ephemeral=True)
 
 class NoteModal(discord.ui.Modal, title="Ajouter une note interne"):
     def __init__(self, channel_id):
