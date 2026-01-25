@@ -131,7 +131,7 @@ class GiveawayConfigView(discord.ui.View):
         self.forbidden_role = None
         self.min_account_age = 0
         self.weighted_mode = False
-        self.booster_bonus = 1.0
+        self.booster_bonus = 1.5
         self.color = 0xF1C40F  # Or
         self.ping_role = None
         self.channel = None
@@ -139,7 +139,7 @@ class GiveawayConfigView(discord.ui.View):
     @discord.ui.button(label="✅ Lancer le Giveaway", style=discord.ButtonStyle.success, row=0)
     async def launch_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.channel:
-            await interaction.response.send_message("❌ Veuillez d'abord sélectionner un salon !", ephemeral=True)
+            await interaction.response.send_message("❌ Veuillez d'abord sélectionner un salon avec `/giveaway_setchannel` !\n\n💡 Ou utilisez `/giveaway_quick` pour créer rapidement.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -205,25 +205,22 @@ class GiveawayConfigView(discord.ui.View):
         # Lancer le countdown
         asyncio.create_task(giveaway_countdown(message.id, self.duration))
         
-        await interaction.followup.send(f"✅ Giveaway lancé avec succès dans {self.channel.mention} !", ephemeral=True)
+        await interaction.followup.send(f"✅ Giveaway lancé avec succès dans {self.channel.mention} !\n\n🔗 [Lien direct]({message.jump_url})", ephemeral=True)
         
         # Log
         await log_giveaway_action(interaction.guild, "🎁 Giveaway créé", self.creator, self.prize, message.jump_url)
     
-    @discord.ui.channel_select(placeholder="📍 Sélectionner le salon", row=1)
-    async def select_channel(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self.channel = select.values[0]
-        await interaction.response.send_message(f"✅ Salon sélectionné : {self.channel.mention}", ephemeral=True)
+    @discord.ui.button(label="📍 Sélectionner salon", style=discord.ButtonStyle.secondary, row=1)
+    async def select_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez la commande `/giveaway_setchannel` pour définir le salon !", ephemeral=True)
     
-    @discord.ui.role_select(placeholder="👔 Rôle requis (optionnel)", row=2)
-    async def select_required_role(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self.required_role = select.values[0].id
-        await interaction.response.send_message(f"✅ Rôle requis : {select.values[0].mention}", ephemeral=True)
+    @discord.ui.button(label="👔 Rôle requis", style=discord.ButtonStyle.secondary, row=2)
+    async def select_required_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez `/giveaway_setrole` pour définir un rôle requis !", ephemeral=True)
     
-    @discord.ui.role_select(placeholder="🔔 Rôle à ping (optionnel)", row=3)
-    async def select_ping_role(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self.ping_role = select.values[0].id
-        await interaction.response.send_message(f"✅ Rôle à ping : {select.values[0].mention}", ephemeral=True)
+    @discord.ui.button(label="🔔 Rôle à ping", style=discord.ButtonStyle.secondary, row=3)
+    async def select_ping_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💡 Utilisez `/giveaway_setping` pour définir le rôle à ping !", ephemeral=True)
     
     @discord.ui.button(label="⚖️ Mode pondéré", style=discord.ButtonStyle.secondary, row=4)
     async def toggle_weighted(self, interaction: discord.Interaction, button: discord.ui.Button):
