@@ -18,6 +18,18 @@ sys.path.append('.')
 # Configuration du bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
+# Configuration du bot
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# ========== CHARGER LE SYSTÈME GIVEAWAY ==========
+try:
+    with open('giveaway.py', 'r', encoding='utf-8') as f:
+        giveaway_code = f.read()
+        exec(giveaway_code, globals())
+    print("✅ Système Giveaway chargé avec succès !")
+except Exception as e:
+    print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
 
 # ========== STOCKAGE DES DONNÉES ==========
 modmail_tickets = {}  # {user_id: {'channel_id', 'guild_id', 'category', 'priority', 'claimed_by', 'messages', 'tags', 'created_at'}}
@@ -1017,4 +1029,5 @@ else:
     print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
+
 
