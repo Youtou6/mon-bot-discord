@@ -10,6 +10,11 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import asyncio
 
+# ========== IMPORT DU SYSTÈME GIVEAWAY ==========
+import sys
+sys.path.append('.')
+
+# Le bot sera défini plus bas, donc on importe après
 # Configuration du bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -1012,3 +1017,4 @@ else:
     print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
+
