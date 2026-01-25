@@ -9,74 +9,7 @@ from flask import Flask
 from datetime import datetime, timedelta
 from collections import defaultdict
 import asyncio
-# Importer le système giveaway
-exec(open('giveaway.py').read())
-```
 
----
-
-## **🎯 COMMANDES GIVEAWAY**
-```
-/giveaway_create - Créer un giveaway (modal interactif)
-/giveaway_end - Terminer un giveaway immédiatement
-/giveaway_reroll - Re-tirer un gagnant
-/giveaway_list - Liste des giveaways actifs
-```
-
----
-
-## **🎨 FONCTIONNALITÉS INCLUSES**
-
-✅ **Création facile** : Modal avec tous les champs  
-✅ **Configuration avancée** : Rôle requis, mode pondéré, etc.  
-✅ **Participation par bouton** : Clic pour participer/annuler  
-✅ **Anti-triche** : Vérif âge compte, rôles, blacklist  
-✅ **Mode pondéré** : Boosters ont plus de chances  
-✅ **Countdown automatique** : Se termine tout seul  
-✅ **Sélection aléatoire** : Équitable ou pondéré  
-✅ **DM aux gagnants** : Automatique  
-✅ **Reroll** : Re-tirer un gagnant  
-✅ **Historique** : Stocké en mémoire  
-✅ **Embeds professionnels** : Design soigné  
-
----
-
-## **💡 UTILISATION**
-
-### **Créer un giveaway :**
-
-1. Tape `/giveaway_create`
-2. Remplis le modal :
-   - Titre : "Nitro 1 mois"
-   - Description : "Gagnez..."
-   - Durée : "2h 30m" ou "1d 12h"
-   - Gagnants : "1"
-   - Image URL : (optionnel)
-
-3. Configure les options :
-   - Sélectionne le salon
-   - Rôle requis (optionnel)
-   - Rôle à ping (optionnel)
-   - Active le mode pondéré si tu veux
-
-4. Clique "✅ Lancer le Giveaway"
-
-5. **C'est parti !** 🎉
-
-### **Participer :**
-
-Les users cliquent sur "🎉 Participer" dans le message du giveaway.
-
-### **Terminer manuellement :**
-```
-/giveaway_end message_id:123456789
-```
-
-(Fais clic droit sur le message → Copier l'ID)
-
-### **Reroll :**
-```
-/giveaway_reroll message_id:123456789
 # Configuration du bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -1079,4 +1012,3 @@ else:
     print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
-
