@@ -31,6 +31,14 @@ try:
 except Exception as e:
     print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
 
+# ========== CHARGER LE SYSTÈME AUTOMOD ==========
+try:
+    with open('automod.py', 'r', encoding='utf-8') as f:
+        automod_code = f.read()
+        exec(automod_code, globals())
+    print("✅ Système AutoMod chargé avec succès !")
+except Exception as e:
+    print(f"⚠️ Erreur lors du chargement du système AutoMod: {e}")
 # ========== STOCKAGE DES DONNÉES ==========
 modmail_tickets = {}  # {user_id: {'channel_id', 'guild_id', 'category', 'priority', 'claimed_by', 'messages', 'tags', 'created_at'}}
 modmail_config = {}  # {guild_id: {config}}
@@ -633,6 +641,17 @@ async def list_tickets(interaction: discord.Interaction):
 
 @bot.event
 async def on_message(message):
+    @bot.event
+async def on_message(message):
+    # AutoMod check (avant tout)
+    try:
+        await on_automod_message(message)
+    except Exception as e:
+        print(f"Erreur AutoMod: {e}")
+    
+    if message.author.bot:
+        return
+    # ... reste du code
     if message.author.bot:
         return
     
@@ -1004,6 +1023,19 @@ async def on_ready():
         print(f'✅ Synchronisé {len(synced)} commandes slash')
     except Exception as e:
         print(f'❌ Erreur de synchronisation: {e}')
+        # Setup AutoMod
+try:
+    await setup_commands(bot)
+    print("✅ Commandes AutoMod enregistrées")
+except Exception as e:
+    print(f"⚠️ Erreur AutoMod commands: {e}")
+
+@bot.event
+async def on_member_join(member):
+    try:
+        await on_automod_member_join(member)
+    except Exception as e:
+        print(f"Erreur AutoMod join: {e}")
 
 # Serveur web pour Render
 app = Flask(__name__)
@@ -1029,5 +1061,6 @@ else:
     print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
+
 
 
