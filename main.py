@@ -30,6 +30,14 @@ try:
     print("✅ Système Giveaway chargé avec succès !")
 except Exception as e:
     print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
+# ========== CHARGER LE SYSTÈME GIVEAWAY ==========
+try:
+    with open('giveaway.py', 'r', encoding='utf-8') as f:
+        giveaway_code = f.read()
+        exec(giveaway_code, globals())
+    print("✅ Système Giveaway chargé avec succès !")
+except Exception as e:
+    print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
 
 # ========== CHARGER LE SYSTÈME AUTOMOD ==========
 try:
@@ -641,17 +649,12 @@ async def list_tickets(interaction: discord.Interaction):
 
 @bot.event
 async def on_message(message):
-    @bot.event
-async def on_message(message):
-    # AutoMod check (avant tout)
+    # AutoMod check (AVANT TOUT)
     try:
         await on_automod_message(message)
     except Exception as e:
         print(f"Erreur AutoMod: {e}")
     
-    if message.author.bot:
-        return
-    # ... reste du code
     if message.author.bot:
         return
     
@@ -681,7 +684,7 @@ async def on_message(message):
                     # Envoyer dans le salon
                     embed = discord.Embed(
                         description=message.content,
-                        color=0x5865F2,  # Bleu Discord
+                        color=0x5865F2,
                         timestamp=datetime.now()
                     )
                     embed.set_author(
@@ -706,14 +709,12 @@ async def on_message(message):
                     return
         
         # Nouveau ticket
-        # Trouver serveur commun
         mutual_guilds = [g for g in bot.guilds if g.get_member(user.id)]
         
         if not mutual_guilds:
             await message.channel.send("❌ Nous ne partageons aucun serveur !")
             return
         
-        # Prendre le premier avec config
         target_guild = None
         for guild in mutual_guilds:
             if guild.id in modmail_config and modmail_config[guild.id].get('category_id'):
@@ -744,7 +745,7 @@ async def on_message(message):
             description=f"Bienvenue sur le système ModMail de **{target_guild.name}** !\n\n"
                        f"Pour commencer, veuillez sélectionner la **catégorie** qui correspond le mieux à votre demande.\n\n"
                        f"💡 *Un membre de notre équipe vous répondra dans les plus brefs délais.*",
-            color=0x5865F2  # Bleu Discord
+            color=0x5865F2
         )
         embed.set_thumbnail(url=target_guild.icon.url if target_guild.icon else None)
         embed.set_footer(text=f"Serveur: {target_guild.name}", icon_url=target_guild.icon.url if target_guild.icon else None)
@@ -763,7 +764,7 @@ async def on_message(message):
             await message.channel.send(embed=timeout_embed)
             return
         
-        # Animation de création avec progression
+        # Animation de création
         progress_embed = discord.Embed(
             title="⏳ Création de votre ticket en cours...",
             description="",
@@ -790,7 +791,7 @@ async def on_message(message):
             
             progress_embed.description = progress_text
             await progress_msg.edit(embed=progress_embed)
-            await asyncio.sleep(0.8)  # Animation fluide
+            await asyncio.sleep(0.8)
         
         # Créer le ticket
         try:
@@ -800,7 +801,6 @@ async def on_message(message):
                 await message.channel.send("❌ Catégorie introuvable !")
                 return
             
-            # Incrémenter compteur
             ticket_counter[target_guild.id] += 1
             ticket_num = ticket_counter[target_guild.id]
             
@@ -811,16 +811,13 @@ async def on_message(message):
                 topic=f"ModMail de {user.name} ({user.id}) - Ticket #{ticket_num}"
             )
             
-            # Permissions
             await ticket_channel.set_permissions(target_guild.default_role, view_channel=False)
             await ticket_channel.set_permissions(user, view_channel=True, send_messages=False, read_messages=True)
             
-            # Permissions staff
             for role in target_guild.roles:
                 if role.permissions.manage_messages or role.permissions.administrator:
                     await ticket_channel.set_permissions(role, view_channel=True, send_messages=True)
             
-            # Enregistrer
             modmail_tickets[user.id] = {
                 'channel_id': ticket_channel.id,
                 'guild_id': target_guild.id,
@@ -832,10 +829,8 @@ async def on_message(message):
                 'created_at': datetime.now()
             }
             
-            # Cooldown
             modmail_cooldowns[user.id] = datetime.now() + timedelta(seconds=config.get('cooldown_seconds', 300))
             
-            # Infos utilisateur
             member = target_guild.get_member(user.id)
             
             embed_ticket = discord.Embed(
@@ -845,19 +840,16 @@ async def on_message(message):
                 timestamp=datetime.now()
             )
             
-            # Message initial
             embed_ticket.add_field(
                 name="💬 Message initial",
                 value=f"```{message.content[:200]}{'...' if len(message.content) > 200 else ''}```",
                 inline=False
             )
             
-            # Catégorie et priorité
             embed_ticket.add_field(name="📂 Catégorie", value=view.category, inline=True)
             embed_ticket.add_field(name="📊 Priorité", value="🟡 Normale", inline=True)
             embed_ticket.add_field(name="🆔 Ticket", value=f"#{ticket_num}", inline=True)
             
-            # Infos utilisateur
             if member:
                 account_age = (datetime.now() - user.created_at.replace(tzinfo=None)).days
                 join_age = (datetime.now() - member.joined_at.replace(tzinfo=None)).days
@@ -883,7 +875,6 @@ async def on_message(message):
             view_control = TicketControlView(ticket_channel, user.id, target_guild.id)
             await ticket_channel.send(embed=embed_ticket, view=view_control)
             
-            # Ping role si configuré
             ping_role_id = config.get('ping_role_id')
             if ping_role_id:
                 role = target_guild.get_role(ping_role_id)
@@ -894,13 +885,12 @@ async def on_message(message):
                     )
                     await ticket_channel.send(embed=ping_embed)
             
-            # Message de bienvenue user (améliorer)
             greeting = config.get('greeting_message', DEFAULT_MODMAIL_CONFIG['greeting_message'])
             
             embed_welcome = discord.Embed(
                 title="✅ Ticket créé avec succès !",
                 description=greeting,
-                color=0x57F287  # Vert
+                color=0x57F287
             )
             embed_welcome.add_field(name="🏢 Serveur", value=target_guild.name, inline=True)
             embed_welcome.add_field(name="📂 Catégorie", value=view.category, inline=True)
@@ -918,7 +908,6 @@ async def on_message(message):
                 icon_url=user.display_avatar.url
             )
             
-            # Supprimer le message de progression
             try:
                 await progress_msg.delete()
             except:
@@ -926,7 +915,6 @@ async def on_message(message):
             
             await message.channel.send(embed=embed_welcome)
             
-            # Log (améliorer)
             log_channel_id = config.get('log_channel_id')
             if log_channel_id:
                 log_channel = target_guild.get_channel(log_channel_id)
@@ -953,7 +941,6 @@ async def on_message(message):
     
     # === MESSAGES DANS LES SALONS DE TICKETS ===
     if message.guild:
-        # Trouver le ticket
         ticket_user_id = None
         for user_id, data in modmail_tickets.items():
             if data['channel_id'] == message.channel.id:
@@ -969,7 +956,7 @@ async def on_message(message):
                 
                 embed = discord.Embed(
                     description=message.content,
-                    color=0x57F287,  # Vert
+                    color=0x57F287,
                     timestamp=datetime.now()
                 )
                 
@@ -1004,7 +991,6 @@ async def on_message(message):
             return
     
     await bot.process_commands(message)
-
 @bot.event
 async def on_ready():
     print(f'{bot.user} est connecté et prêt !')
@@ -1018,24 +1004,18 @@ async def on_ready():
     )
     await bot.change_presence(activity=activity, status=discord.Status.online)
     
+    # Setup AutoMod
+    try:
+        await setup_commands(bot)
+        print("✅ Commandes AutoMod enregistrées")
+    except Exception as e:
+        print(f"⚠️ Erreur AutoMod commands: {e}")
+    
     try:
         synced = await bot.tree.sync()
         print(f'✅ Synchronisé {len(synced)} commandes slash')
     except Exception as e:
         print(f'❌ Erreur de synchronisation: {e}')
-        # Setup AutoMod
-try:
-    await setup_commands(bot)
-    print("✅ Commandes AutoMod enregistrées")
-except Exception as e:
-    print(f"⚠️ Erreur AutoMod commands: {e}")
-
-@bot.event
-async def on_member_join(member):
-    try:
-        await on_automod_member_join(member)
-    except Exception as e:
-        print(f"Erreur AutoMod join: {e}")
 
 # Serveur web pour Render
 app = Flask(__name__)
@@ -1051,7 +1031,12 @@ def run_web():
 def keep_alive():
     t = Thread(target=run_web)
     t.start()
-
+@bot.event
+async def on_member_join(member):
+    try:
+        await on_automod_member_join(member)
+    except Exception as e:
+        print(f"Erreur AutoMod join: {e}")
 # Lance le bot
 TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
@@ -1061,6 +1046,3 @@ else:
     print("✅ Token trouvé, démarrage du bot...")
     keep_alive()
     bot.run(TOKEN)
-
-
-
