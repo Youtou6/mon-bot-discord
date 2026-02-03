@@ -1409,7 +1409,7 @@ async def on_ready():
     
     # Statut personnalisé
     activity = discord.Streaming(
-        name="🎫 ModMail • AutoMod • Giveaways",
+        name="🎫 DM pour ouvrir un ticket",
         url="https://twitch.tv/helpdesk"
     )
     await bot.change_presence(activity=activity, status=discord.Status.online)
@@ -1529,3 +1529,4 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
