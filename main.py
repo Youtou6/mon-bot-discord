@@ -36,6 +36,15 @@ try:
 except Exception as e:
     print(f"⚠️ Erreur lors du chargement du système AutoMod: {e}")
 
+# ========== CHARGER LUNERA SECURITY ==========
+try:
+    with open('lunera_security.py', 'r', encoding='utf-8') as f:
+        lunera_code = f.read()
+        exec(lunera_code, globals())
+    print("🌙 ✅ Lunera Security chargé !")
+except Exception as e:
+    print(f"⚠️ Erreur Lunera: {e}")
+
 # ========== STOCKAGE DES DONNÉES ==========
 modmail_tickets = {}
 modmail_config = {}
@@ -960,6 +969,12 @@ async def list_tickets(interaction: discord.Interaction):
 
 @bot.event
 async def on_message(message):
+
+    # Lunera Security check
+try:
+    await on_lunera_message(message)
+except Exception as e:
+    print(f"Erreur Lunera: {e}")
     # AutoMod check (AVANT TOUT)
     try:
         await on_automod_message(message)
@@ -1394,12 +1409,21 @@ async def on_message(message):
 @bot.event
 async def on_member_join(member):
     try:
+    await on_lunera_member_join(member)
+except Exception as e:
+    print(f"Erreur Lunera join: {e}")
+    try:
         await on_automod_member_join(member)
     except Exception as e:
         print(f"Erreur AutoMod join: {e}")
 
 @bot.event
 async def on_ready():
+    try:
+    await setup_lunera_commands(bot)
+    print("🌙 Commandes Lunera enregistrées")
+except Exception as e:
+    print(f"⚠️ Erreur Lunera commands: {e}")
     print("="*50)
     print(f'✅ {bot.user} est connecté et prêt !')
     print(f'🆔 Bot ID: {bot.user.id}')
@@ -1529,4 +1553,5 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
