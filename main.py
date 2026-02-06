@@ -1408,9 +1408,10 @@ async def on_message(message):
 @bot.event
 async def on_member_join(member):
     try:
-    await on_lunera_member_join(member)
-except Exception as e:
-    print(f"Erreur Lunera join: {e}")
+        await on_lunera_member_join(member)
+    except Exception as e:
+        print(f"Erreur Lunera join: {e}")
+    
     try:
         await on_automod_member_join(member)
     except Exception as e:
@@ -1419,17 +1420,17 @@ except Exception as e:
 @bot.event
 async def on_ready():
     try:
-    await setup_lunera_commands(bot)
-    print("🌙 Commandes Lunera enregistrées")
-except Exception as e:
-    print(f"⚠️ Erreur Lunera commands: {e}")
+        await setup_lunera_commands(bot)
+        print("🌙 Commandes Lunera enregistrées")
+    except Exception as e:
+        print(f"⚠️ Erreur Lunera commands: {e}")
+    
     print("="*50)
     print(f'✅ {bot.user} est connecté et prêt !')
     print(f'🆔 Bot ID: {bot.user.id}')
     print(f'🌐 Serveurs: {len(bot.guilds)}')
     print(f'👥 Utilisateurs: {sum(g.member_count for g in bot.guilds)}')
     print("="*50)
-    
     # Statut personnalisé
     activity = discord.Streaming(
         name="🎫 DM pour ouvrir un ticket",
@@ -1552,6 +1553,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
