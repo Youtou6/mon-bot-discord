@@ -353,12 +353,53 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
     config = get_config(message.guild.id)
     user = message.author
     
-    # Supprimer le message si nécessaire
-    if action in ['delete', 'warn', 'mute']:
+    # Message de notification pour l'utilisateur
+    notification_sent = False
+    
+    # === DELETE (avec notification) ===
+    if action == 'delete':
         try:
             await message.delete()
+            
+            # Notifier l'utilisateur en DM
+            if config.get('dm_warnings', True):
+                try:
+                    embed = discord.Embed(
+                        title="🗑️ Message supprimé - Lunera Security",
+                        description=f"**Serveur:** {message.guild.name}\n**Salon:** {message.channel.mention}",
+                        color=0xFEE75C,
+                        timestamp=datetime.now()
+                    )
+                    embed.add_field(name="📝 Raison", value=reason, inline=False)
+                    embed.add_field(name="💬 Votre message", value=f"```{message.content[:200]}```", inline=False)
+                    embed.add_field(name="💡 Conseil", value="Veuillez respecter les règles du serveur", inline=False)
+                    embed.set_footer(text="🌙 Lunera Security")
+                    await user.send(embed=embed)
+                    notification_sent = True
+                except:
+                    pass
+            
+            # Message dans le salon (temporaire)
+            if not notification_sent:
+                try:
+                    embed = discord.Embed(
+                        description=f"🗑️ Message de {user.mention} supprimé\n**Raison:** {reason}",
+                        color=0xFEE75C
+                    )
+                    await message.channel.send(embed=embed, delete_after=5)
+                except:
+                    pass
+            
+            await log_security_event(message.guild, 'delete', user, reason, severity)
         except:
             pass
+        return
+    
+    # Supprimer le message pour toutes les autres actions
+    try:
+        await message.delete()
+    except:
+        pass
     
     # === WARN ===
     if action == 'warn':
@@ -382,17 +423,33 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
         warn_count = len([w for w in user_warnings[user.id] if w['guild_id'] == message.guild.id])
         threshold = config.get('warn_threshold', 3)
         
-        # Notification DM
+        # Notification DM DÉTAILLÉE
         if config.get('dm_warnings', True):
             try:
                 embed = discord.Embed(
                     title="⚠️ Avertissement - Lunera Security",
-                    description=f"**Serveur:** {message.guild.name}\n**Raison:** {reason}",
-                    color=0xFEE75C
+                    description=f"Vous avez reçu un avertissement sur **{message.guild.name}**",
+                    color=0xFEE75C,
+                    timestamp=datetime.now()
                 )
-                embed.add_field(name="📊 Warns", value=f"{warn_count}/{threshold}", inline=True)
-                embed.add_field(name="💡 Conseil", value="Respectez les règles pour éviter les sanctions", inline=False)
+                embed.add_field(name="📝 Raison", value=reason, inline=False)
+                embed.add_field(name="💬 Votre message", value=f"```{message.content[:200]}```", inline=False)
+                embed.add_field(name="📊 Avertissements", value=f"**{warn_count}/{threshold}**", inline=True)
+                
+                trust_score = get_trust_score(user.id, message.guild.id)
+                trust_emoji = "🟢" if trust_score >= 70 else "🟡" if trust_score >= 40 else "🔴"
+                embed.add_field(name="💯 Score de confiance", value=f"{trust_emoji} {trust_score}/100", inline=True)
+                
+                if warn_count >= threshold - 1:
+                    embed.add_field(
+                        name="⚠️ ATTENTION",
+                        value=f"Vous êtes à **{warn_count}/{threshold}** warns. Le prochain avertissement entraînera une sanction automatique.",
+                        inline=False
+                    )
+                
+                embed.set_footer(text="🌙 Lunera Security - Système de modération automatique")
                 await user.send(embed=embed)
+                notification_sent = True
             except:
                 pass
         
@@ -400,7 +457,7 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
         try:
             embed = discord.Embed(
                 title="⚠️ Avertissement",
-                description=f"**{user.mention}**\n{reason}\n\n**Warns:** {warn_count}/{threshold}",
+                description=f"**{user.mention}** a reçu un avertissement\n\n**Raison:** {reason}\n**Warns:** {warn_count}/{threshold}",
                 color=0xFEE75C
             )
             await message.channel.send(embed=embed, delete_after=8)
@@ -409,7 +466,7 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
         
         await log_security_event(
             message.guild, 'warn', user, reason, severity,
-            {'Warns': f"{warn_count}/{threshold}"}
+            {'Warns': f"{warn_count}/{threshold}", 'Message': message.content[:100]}
         )
         
         # Auto-escalade si seuil atteint
@@ -428,34 +485,56 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
             user_infractions[user.id]['mutes'] += 1
             update_trust_score(user.id, message.guild.id, -15)
             
-            # Notification DM
+            mins = mute_duration // 60
+            
+            # Notification DM DÉTAILLÉE
             if config.get('dm_sanctions', True):
                 try:
-                    mins = mute_duration // 60
                     embed = discord.Embed(
-                        title="🔇 Timeout - Lunera Security",
-                        description=f"**Serveur:** {message.guild.name}\n**Raison:** {reason}\n**Durée:** {mins} minutes",
-                        color=0xED4245
+                        title="🔇 Vous avez été mis en timeout - Lunera Security",
+                        description=f"Vous ne pouvez plus envoyer de messages sur **{message.guild.name}**",
+                        color=0xED4245,
+                        timestamp=datetime.now()
                     )
+                    embed.add_field(name="📝 Raison", value=reason, inline=False)
+                    embed.add_field(name="⏱️ Durée", value=f"**{mins} minutes**", inline=True)
+                    
+                    # Calculer l'heure de fin
+                    end_time = datetime.now() + timedelta(seconds=mute_duration)
+                    embed.add_field(name="🕐 Fin du timeout", value=f"<t:{int(end_time.timestamp())}:R>", inline=True)
+                    
+                    trust_score = get_trust_score(user.id, message.guild.id)
+                    trust_emoji = "🟢" if trust_score >= 70 else "🟡" if trust_score >= 40 else "🔴"
+                    embed.add_field(name="💯 Score de confiance", value=f"{trust_emoji} {trust_score}/100", inline=True)
+                    
+                    embed.add_field(
+                        name="💡 Que faire maintenant ?",
+                        value="• Attendez la fin du timeout\n• Lisez les règles du serveur\n• Évitez de répéter ce comportement",
+                        inline=False
+                    )
+                    
+                    embed.set_footer(text="🌙 Lunera Security")
                     await user.send(embed=embed)
+                    notification_sent = True
                 except:
                     pass
             
             # Message public
             try:
-                mins = mute_duration // 60
                 embed = discord.Embed(
-                    title="🔇 Membre timeout",
-                    description=f"**{user.mention}** a été mis en timeout\n**Durée:** {mins} minutes\n**Raison:** {reason}",
-                    color=0xED4245
+                    title="🔇 Membre mis en timeout",
+                    description=f"**{user.mention}** ne peut plus parler pendant **{mins} minutes**\n\n**Raison:** {reason}",
+                    color=0xED4245,
+                    timestamp=datetime.now()
                 )
+                embed.set_footer(text="🌙 Lunera Security")
                 await message.channel.send(embed=embed, delete_after=10)
             except:
                 pass
             
             await log_security_event(
                 message.guild, 'mute', user, reason, 'high',
-                {'Durée': f"{mute_duration}s"}
+                {'Durée': f"{mins} min", 'Message': message.content[:100]}
             )
         except:
             pass
@@ -463,13 +542,34 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
     # === KICK ===
     if action == 'kick':
         try:
+            # Notification AVANT le kick
+            if config.get('dm_sanctions', True):
+                try:
+                    embed = discord.Embed(
+                        title="👢 Vous avez été expulsé - Lunera Security",
+                        description=f"Vous avez été expulsé de **{message.guild.name}**",
+                        color=0xED4245,
+                        timestamp=datetime.now()
+                    )
+                    embed.add_field(name="📝 Raison", value=reason, inline=False)
+                    embed.add_field(
+                        name="💡 Que faire ?",
+                        value="• Vous pouvez rejoindre à nouveau le serveur si vous avez un lien d'invitation\n• Assurez-vous de respecter les règles à l'avenir",
+                        inline=False
+                    )
+                    embed.set_footer(text="🌙 Lunera Security")
+                    await user.send(embed=embed)
+                except:
+                    pass
+            
             await user.kick(reason=f"Lunera Security: {reason}")
             
             user_infractions[user.id]['kicks'] += 1
             update_trust_score(user.id, message.guild.id, -30)
             
             await log_security_event(
-                message.guild, 'kick', user, reason, 'high'
+                message.guild, 'kick', user, reason, 'high',
+                {'Message': message.content[:100]}
             )
         except:
             pass
@@ -477,12 +577,33 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
     # === BAN ===
     if action == 'ban':
         try:
+            # Notification AVANT le ban
+            if config.get('dm_sanctions', True):
+                try:
+                    embed = discord.Embed(
+                        title="🔨 Vous avez été banni - Lunera Security",
+                        description=f"Vous avez été **définitivement banni** de **{message.guild.name}**",
+                        color=0xED4245,
+                        timestamp=datetime.now()
+                    )
+                    embed.add_field(name="📝 Raison", value=reason, inline=False)
+                    embed.add_field(
+                        name="⚠️ Important",
+                        value="Ce bannissement est permanent. Contactez les administrateurs du serveur si vous pensez qu'il s'agit d'une erreur.",
+                        inline=False
+                    )
+                    embed.set_footer(text="🌙 Lunera Security")
+                    await user.send(embed=embed)
+                except:
+                    pass
+            
             await user.ban(reason=f"Lunera Security: {reason}", delete_message_days=1)
             
             update_trust_score(user.id, message.guild.id, -100)
             
             await log_security_event(
-                message.guild, 'ban', user, reason, 'critical'
+                message.guild, 'ban', user, reason, 'critical',
+                {'Message': message.content[:100]}
             )
         except:
             pass
@@ -495,6 +616,26 @@ async def apply_sanction(message, reason, action='warn', duration=None, severity
             if role:
                 try:
                     await user.add_roles(role, reason=f"Lunera Security: {reason}")
+                    
+                    # Notification quarantaine
+                    if config.get('dm_sanctions', True):
+                        try:
+                            embed = discord.Embed(
+                                title="🔒 Vous avez été mis en quarantaine - Lunera Security",
+                                description=f"Votre compte a été placé en quarantaine sur **{message.guild.name}**",
+                                color=0xED4245,
+                                timestamp=datetime.now()
+                            )
+                            embed.add_field(name="📝 Raison", value=reason, inline=False)
+                            embed.add_field(
+                                name="💡 Que faire ?",
+                                value="• Contactez un modérateur pour faire lever la quarantaine\n• Prouvez que vous n'êtes pas une menace pour le serveur",
+                                inline=False
+                            )
+                            embed.set_footer(text="🌙 Lunera Security")
+                            await user.send(embed=embed)
+                        except:
+                            pass
                     
                     await log_security_event(
                         message.guild, 'quarantine', user, reason, 'high'
@@ -1450,6 +1591,295 @@ async def setup_lunera_commands(bot):
         
         embed.set_footer(text="🌙 Lunera Security - Statistiques en temps réel")
         embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    # ========== COMMANDES DE GESTION MANUELLE ==========
+    
+    @bot.tree.command(name="lunera_warn", description="⚠️ Avertir manuellement un utilisateur")
+    @app_commands.describe(
+        utilisateur="Utilisateur à avertir",
+        raison="Raison de l'avertissement"
+    )
+    async def lunera_manual_warn(interaction: discord.Interaction, utilisateur: discord.Member, raison: str):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        # Ajouter le warn
+        user_warnings[utilisateur.id].append({
+            'guild_id': interaction.guild.id,
+            'reason': raison,
+            'timestamp': datetime.now(),
+            'moderator': interaction.user.id
+        })
+        
+        user_infractions[utilisateur.id]['warns'] += 1
+        update_trust_score(utilisateur.id, interaction.guild.id, -5)
+        
+        config = get_config(interaction.guild.id)
+        warn_count = len([w for w in user_warnings[utilisateur.id] if w['guild_id'] == interaction.guild.id])
+        threshold = config.get('warn_threshold', 3)
+        
+        # Notifier l'utilisateur
+        try:
+            embed = discord.Embed(
+                title="⚠️ Avertissement - Lunera Security",
+                description=f"Vous avez reçu un avertissement sur **{interaction.guild.name}**",
+                color=0xFEE75C,
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="📝 Raison", value=raison, inline=False)
+            embed.add_field(name="👮 Par", value=interaction.user.mention, inline=True)
+            embed.add_field(name="📊 Warns", value=f"{warn_count}/{threshold}", inline=True)
+            embed.set_footer(text="🌙 Lunera Security")
+            await utilisateur.send(embed=embed)
+        except:
+            pass
+        
+        # Log
+        await log_security_event(
+            interaction.guild, 'warn', utilisateur, raison, 'medium',
+            {'Moderator': interaction.user.name, 'Warns': f"{warn_count}/{threshold}"}
+        )
+        
+        # Confirmation
+        embed = discord.Embed(
+            title="✅ Avertissement donné",
+            description=f"{utilisateur.mention} a reçu un avertissement\n\n**Raison:** {raison}\n**Warns:** {warn_count}/{threshold}",
+            color=0x57F287
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @bot.tree.command(name="lunera_unwarn", description="🔓 Retirer un avertissement")
+    @app_commands.describe(
+        utilisateur="Utilisateur",
+        nombre="Nombre de warns à retirer (par défaut: 1)"
+    )
+    async def lunera_unwarn(interaction: discord.Interaction, utilisateur: discord.Member, nombre: int = 1):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        guild_warns = [w for w in user_warnings[utilisateur.id] if w['guild_id'] == interaction.guild.id]
+        
+        if not guild_warns:
+            await interaction.response.send_message(f"❌ {utilisateur.mention} n'a aucun warn", ephemeral=True)
+            return
+        
+        # Retirer les warns
+        removed = 0
+        for _ in range(min(nombre, len(guild_warns))):
+            for i, w in enumerate(user_warnings[utilisateur.id]):
+                if w['guild_id'] == interaction.guild.id:
+                    user_warnings[utilisateur.id].pop(i)
+                    removed += 1
+                    user_infractions[utilisateur.id]['warns'] = max(0, user_infractions[utilisateur.id]['warns'] - 1)
+                    update_trust_score(utilisateur.id, interaction.guild.id, +5)
+                    break
+        
+        # Notifier
+        try:
+            embed = discord.Embed(
+                title="✅ Avertissement(s) retiré(s)",
+                description=f"**{removed}** avertissement(s) vous ont été retirés sur **{interaction.guild.name}**",
+                color=0x57F287
+            )
+            embed.add_field(name="👮 Par", value=interaction.user.mention, inline=True)
+            embed.set_footer(text="🌙 Lunera Security")
+            await utilisateur.send(embed=embed)
+        except:
+            pass
+        
+        remaining = len([w for w in user_warnings[utilisateur.id] if w['guild_id'] == interaction.guild.id])
+        
+        embed = discord.Embed(
+            title="✅ Warns retirés",
+            description=f"{removed} warn(s) retiré(s) pour {utilisateur.mention}\n**Warns restants:** {remaining}",
+            color=0x57F287
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @bot.tree.command(name="lunera_mute", description="🔇 Timeout manuel")
+    @app_commands.describe(
+        utilisateur="Utilisateur à mute",
+        duree="Durée en minutes",
+        raison="Raison du timeout"
+    )
+    async def lunera_manual_mute(interaction: discord.Interaction, utilisateur: discord.Member, duree: int, raison: str):
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        try:
+            timeout_until = datetime.now() + timedelta(minutes=duree)
+            await utilisateur.timeout(timeout_until, reason=f"Lunera Security: {raison} (Par {interaction.user.name})")
+            
+            user_infractions[utilisateur.id]['mutes'] += 1
+            update_trust_score(utilisateur.id, interaction.guild.id, -10)
+            
+            # Notifier
+            try:
+                embed = discord.Embed(
+                    title="🔇 Timeout - Lunera Security",
+                    description=f"Vous avez été mis en timeout sur **{interaction.guild.name}**",
+                    color=0xED4245,
+                    timestamp=datetime.now()
+                )
+                embed.add_field(name="📝 Raison", value=raison, inline=False)
+                embed.add_field(name="👮 Par", value=interaction.user.mention, inline=True)
+                embed.add_field(name="⏱️ Durée", value=f"{duree} minutes", inline=True)
+                embed.add_field(name="🕐 Fin", value=f"<t:{int(timeout_until.timestamp())}:R>", inline=True)
+                embed.set_footer(text="🌙 Lunera Security")
+                await utilisateur.send(embed=embed)
+            except:
+                pass
+            
+            # Log
+            await log_security_event(
+                interaction.guild, 'mute', utilisateur, raison, 'high',
+                {'Moderator': interaction.user.name, 'Durée': f"{duree} min"}
+            )
+            
+            embed = discord.Embed(
+                title="✅ Timeout appliqué",
+                description=f"{utilisateur.mention} a été mis en timeout\n\n**Durée:** {duree} minutes\n**Raison:** {raison}",
+                color=0x57F287
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
+    
+    @bot.tree.command(name="lunera_unmute", description="🔊 Retirer le timeout")
+    @app_commands.describe(utilisateur="Utilisateur à unmute")
+    async def lunera_unmute(interaction: discord.Interaction, utilisateur: discord.Member):
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        try:
+            await utilisateur.timeout(None, reason=f"Timeout retiré par {interaction.user.name}")
+            
+            update_trust_score(utilisateur.id, interaction.guild.id, +5)
+            
+            # Notifier
+            try:
+                embed = discord.Embed(
+                    title="🔊 Timeout retiré",
+                    description=f"Votre timeout a été levé sur **{interaction.guild.name}**",
+                    color=0x57F287
+                )
+                embed.add_field(name="👮 Par", value=interaction.user.mention, inline=True)
+                embed.set_footer(text="🌙 Lunera Security")
+                await utilisateur.send(embed=embed)
+            except:
+                pass
+            
+            embed = discord.Embed(
+                title="✅ Timeout retiré",
+                description=f"Le timeout de {utilisateur.mention} a été levé",
+                color=0x57F287
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erreur: {str(e)}", ephemeral=True)
+    
+    @bot.tree.command(name="lunera_reset", description="🔄 Réinitialiser toutes les sanctions d'un utilisateur")
+    @app_commands.describe(utilisateur="Utilisateur")
+    async def lunera_reset(interaction: discord.Interaction, utilisateur: discord.Member):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Permission refusée (Admin requis)", ephemeral=True)
+            return
+        
+        # Reset warns
+        old_warns = len([w for w in user_warnings[utilisateur.id] if w['guild_id'] == interaction.guild.id])
+        user_warnings[utilisateur.id] = [
+            w for w in user_warnings[utilisateur.id]
+            if w['guild_id'] != interaction.guild.id
+        ]
+        
+        # Reset infractions
+        user_infractions[utilisateur.id] = {'warns': 0, 'mutes': 0, 'kicks': 0}
+        
+        # Reset score de confiance
+        key = f"{interaction.guild.id}_{utilisateur.id}"
+        user_trust_scores[key] = 100
+        
+        # Notifier
+        try:
+            embed = discord.Embed(
+                title="🔄 Sanctions réinitialisées",
+                description=f"Toutes vos sanctions ont été effacées sur **{interaction.guild.name}**",
+                color=0x57F287
+            )
+            embed.add_field(name="👮 Par", value=interaction.user.mention, inline=True)
+            embed.add_field(name="💯 Nouveau score", value="100/100", inline=True)
+            embed.set_footer(text="🌙 Lunera Security")
+            await utilisateur.send(embed=embed)
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="✅ Utilisateur réinitialisé",
+            description=f"Toutes les sanctions de {utilisateur.mention} ont été effacées",
+            color=0x57F287
+        )
+        embed.add_field(name="⚠️ Warns supprimés", value=str(old_warns), inline=True)
+        embed.add_field(name="💯 Nouveau score", value="100/100", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @bot.tree.command(name="lunera_set_action", description="⚙️ Configurer l'action d'un filtre")
+    @app_commands.describe(
+        filtre="Filtre à configurer",
+        action="Action à appliquer"
+    )
+    @app_commands.choices(
+        filtre=[
+            app_commands.Choice(name="Spam", value="spam_action"),
+            app_commands.Choice(name="Mots interdits", value="banned_words_action"),
+            app_commands.Choice(name="Liens", value="link_action"),
+            app_commands.Choice(name="Caps/Flood", value="caps_action"),
+            app_commands.Choice(name="Mentions", value="mention_action"),
+        ],
+        action=[
+            app_commands.Choice(name="Supprimer seulement", value="delete"),
+            app_commands.Choice(name="Avertir", value="warn"),
+            app_commands.Choice(name="Timeout", value="mute"),
+            app_commands.Choice(name="Kick", value="kick"),
+        ]
+    )
+    async def lunera_set_action(interaction: discord.Interaction, filtre: str, action: str):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        config = get_config(interaction.guild.id)
+        config[filtre] = action
+        
+        filter_names = {
+            'spam_action': '🚫 Anti-spam',
+            'banned_words_action': '🔤 Mots interdits',
+            'link_action': '🔗 Liens',
+            'caps_action': '📢 Caps/Flood',
+            'mention_action': '👥 Mentions',
+        }
+        
+        action_names = {
+            'delete': '🗑️ Supprimer',
+            'warn': '⚠️ Avertir',
+            'mute': '🔇 Timeout',
+            'kick': '👢 Kick',
+        }
+        
+        embed = discord.Embed(
+            title="✅ Action configurée",
+            description=f"**Filtre:** {filter_names.get(filtre, filtre)}\n**Nouvelle action:** {action_names.get(action, action)}",
+            color=0x57F287
+        )
+        embed.set_footer(text="🌙 Lunera Security")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
