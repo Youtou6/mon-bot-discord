@@ -966,15 +966,14 @@ async def list_tickets(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ========== GESTION DES MESSAGES ==========
-
 @bot.event
 async def on_message(message):
-
     # Lunera Security check
-try:
-    await on_lunera_message(message)
-except Exception as e:
-    print(f"Erreur Lunera: {e}")
+    try:
+        await on_lunera_message(message)
+    except Exception as e:
+        print(f"Erreur Lunera: {e}")
+    
     # AutoMod check (AVANT TOUT)
     try:
         await on_automod_message(message)
@@ -1553,5 +1552,6 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
