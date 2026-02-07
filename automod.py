@@ -1883,4 +1883,186 @@ async def setup_lunera_commands(bot):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    
+    @bot.tree.command(name="lunera_actions", description="⚙️ Panneau de configuration des actions")
+    async def lunera_actions_panel(interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        config = get_config(interaction.guild.id)
+        
+        embed = discord.Embed(
+            title="⚙️ Configuration des Actions - Lunera Security",
+            description="```ansi\n[2;36m╔════════════════════════════════════════╗\n║  PERSONNALISATION DES SANCTIONS     ║\n╚════════════════════════════════════════╝[0m\n```\nConfigurez l'action appliquée pour chaque type de violation",
+            color=0x5865F2,
+            timestamp=datetime.now()
+        )
+        
+        # Actions actuelles avec emojis stylés
+        actions_emoji = {
+            'delete': '🗑️ Supprimer',
+            'warn': '⚠️ Avertir',
+            'mute': '🔇 Timeout',
+            'kick': '👢 Expulser',
+            'ban': '🔨 Bannir'
+        }
+        
+        filters = {
+            'spam_action': ('🚫 Anti-Spam', config.get('spam_action', 'mute')),
+            'banned_words_action': ('🔤 Mots Interdits', config.get('banned_words_action', 'warn')),
+            'link_action': ('🔗 Liens Non Autorisés', config.get('link_action', 'delete')),
+            'caps_action': ('📢 Abus Majuscules', config.get('caps_action', 'delete')),
+            'emoji_action': ('😀 Spam Emojis', config.get('emoji_action', 'delete')),
+            'mention_action': ('👥 Spam Mentions', config.get('mention_action', 'warn')),
+        }
+        
+        for filter_key, (filter_name, current_action) in filters.items():
+            action_display = actions_emoji.get(current_action, current_action)
+            embed.add_field(
+                name=filter_name,
+                value=f"```yaml\nAction: {action_display}\n```",
+                inline=True
+            )
+        
+        embed.add_field(
+            name="📝 Comment modifier ?",
+            value="```fix\nUtilisez /lunera_set_action pour changer une action\n```",
+            inline=False
+        )
+        
+        embed.set_footer(text="🌙 Lunera Security • Personnalisation avancée")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @bot.tree.command(name="lunera_set_action", description="⚙️ Configurer l'action d'un filtre")
+    @app_commands.describe(
+        filtre="Filtre à configurer",
+        action="Action à appliquer"
+    )
+    @app_commands.choices(
+        filtre=[
+            app_commands.Choice(name="🚫 Anti-Spam", value="spam_action"),
+            app_commands.Choice(name="🔤 Mots interdits", value="banned_words_action"),
+            app_commands.Choice(name="🔗 Liens non autorisés", value="link_action"),
+            app_commands.Choice(name="📢 Abus majuscules", value="caps_action"),
+            app_commands.Choice(name="😀 Spam emojis", value="emoji_action"),
+            app_commands.Choice(name="👥 Spam mentions", value="mention_action"),
+        ],
+        action=[
+            app_commands.Choice(name="🗑️ Supprimer seulement", value="delete"),
+            app_commands.Choice(name="⚠️ Avertir", value="warn"),
+            app_commands.Choice(name="🔇 Timeout", value="mute"),
+            app_commands.Choice(name="👢 Expulser", value="kick"),
+        ]
+    )
+    async def lunera_set_action(interaction: discord.Interaction, filtre: str, action: str):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        config = get_config(interaction.guild.id)
+        config[filtre] = action
+        
+        filter_names = {
+            'spam_action': '🚫 Anti-Spam',
+            'banned_words_action': '🔤 Mots interdits',
+            'link_action': '🔗 Liens non autorisés',
+            'caps_action': '📢 Abus majuscules',
+            'emoji_action': '😀 Spam emojis',
+            'mention_action': '👥 Spam mentions',
+        }
+        
+        action_names = {
+            'delete': '🗑️ Supprimer',
+            'warn': '⚠️ Avertir',
+            'mute': '🔇 Timeout',
+            'kick': '👢 Expulser',
+        }
+        
+        embed = discord.Embed(
+            title="✅ Action Configurée",
+            description=f"```ansi\n[2;32m╔════════════════════════════════════════╗\n║     CONFIGURATION MISE À JOUR        ║\n╚════════════════════════════════════════╝[0m\n```",
+            color=0x57F287,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(
+            name="📋 Filtre",
+            value=f"```{filter_names.get(filtre, filtre)}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="⚡ Nouvelle Action",
+            value=f"```{action_names.get(action, action)}```",
+            inline=True
+        )
+        
+        embed.set_footer(text="🌙 Lunera Security • Les changements sont effectifs immédiatement")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @bot.tree.command(name="lunera_set_threshold", description="📊 Configurer les seuils de détection")
+    @app_commands.describe(
+        parametre="Paramètre à modifier",
+        valeur="Nouvelle valeur"
+    )
+    @app_commands.choices(parametre=[
+        app_commands.Choice(name="🚫 Messages spam (nombre)", value="spam_messages"),
+        app_commands.Choice(name="⏱️ Intervalle spam (secondes)", value="spam_interval"),
+        app_commands.Choice(name="📢 Max majuscules (%)", value="max_caps_percentage"),
+        app_commands.Choice(name="😀 Max emojis", value="max_emojis"),
+        app_commands.Choice(name="👥 Max mentions", value="max_mentions"),
+        app_commands.Choice(name="⚠️ Warns avant sanction", value="warn_threshold"),
+        app_commands.Choice(name="🔇 Durée mute (secondes)", value="mute_duration"),
+    ])
+    async def lunera_set_threshold(interaction: discord.Interaction, parametre: str, valeur: int):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Permission refusée", ephemeral=True)
+            return
+        
+        config = get_config(interaction.guild.id)
+        old_value = config.get(parametre, 0)
+        config[parametre] = valeur
+        
+        param_names = {
+            'spam_messages': '🚫 Messages spam',
+            'spam_interval': '⏱️ Intervalle spam',
+            'max_caps_percentage': '📢 Max majuscules',
+            'max_emojis': '😀 Max emojis',
+            'max_mentions': '👥 Max mentions',
+            'warn_threshold': '⚠️ Seuil warns',
+            'mute_duration': '🔇 Durée mute',
+        }
+        
+        embed = discord.Embed(
+            title="✅ Seuil Modifié",
+            description=f"```ansi\n[2;32m╔════════════════════════════════════════╗\n║       PARAMÈTRE MIS À JOUR           ║\n╚════════════════════════════════════════╝[0m\n```",
+            color=0x57F287,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(
+            name="📋 Paramètre",
+            value=f"```{param_names.get(parametre, parametre)}```",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📉 Ancienne valeur",
+            value=f"```{old_value}```",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📈 Nouvelle valeur",
+            value=f"```{valeur}```",
+            inline=True
+        )
+        
+        embed.set_footer(text="🌙 Lunera Security • Changement effectif immédiatement")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 print("🌙 ✅ Lunera Security chargé avec succès")
