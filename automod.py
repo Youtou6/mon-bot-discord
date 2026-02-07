@@ -62,13 +62,41 @@ DEFAULT_CONFIG = {
     
     # 3. Filtre de Contenu
     'word_filter': True,
-    'banned_words': [
-        # Insultes
-        'connard', 'salope', 'pute', 'fdp', 'ntm', 'enculé', 'batard',
-        # Variations
-        'c0nnard', 's@lope', 'put3', 'enc***', 'b@tard',
-        # Toxicité
-        'kys', 'suicide', 'meurt', 'crève'
+    'banned_words':[
+    'malpt',
+    'baiser', 'bander', 'bigornette', 'bite', 'bitte', 'bloblos',
+    'bordel', 'bourré', 'bourrée', 'brackmard', 'branlage',
+    'branler', 'branlette', 'branleur', 'branleuse',
+    'caca', 'chatte', 'chiasse', 'chier', 'chiottes',
+    'clito', 'clitoris',
+    'con', 'connard', 'connasse', 'conne',
+    'couilles', 'cramouille', 'cul',
+    'déconne', 'déconner',
+    'emmerdant', 'emmerder', 'emmerdeur', 'emmerdeuse',
+    'enculeur', 'enculeurs', 'enculé', 'enculée',
+    'enfoiré', 'enfoirée',
+    'folle',
+    'foutre',
+    'gerbe', 'gerber',
+    'gouine', 'grogniasse', 'gueule',
+    'jouir',
+    'merde', 'merdeuse', 'merdeux',
+    'meuf',
+    'negro', 'nègre',
+    'palucher',
+    'pipi', 'pisser',
+    'pouffiasse',
+    'putain', 'pute',
+    'pédale', 'pédé',
+    'péter',
+    'ramoner',
+    'salaud', 'salope',
+    'suce',
+    'tanche', 'tapette', 'teuch', 'tringler', 'trique', 'troncher', 'turlute',
+    'zigounette', 'zizi',
+    'étron'
+]
+
     ],
     'word_filter_action': 'delete',
     'word_filter_sensitivity': 'high',  # low, medium, high
