@@ -18,6 +18,10 @@ sys.path.append('.')
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Tout en haut du fichier, après les imports
+from votre_fichier_lunera import *  # Importer toutes les fonctions Lunera
+
+# Puis ajoutez le contenu du fichier lunera_commands.py que je viens de créer
 # ========== CHARGER LE SYSTÈME GIVEAWAY ==========
 try:
     with open('giveaway.py', 'r', encoding='utf-8') as f:
@@ -1553,6 +1557,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
