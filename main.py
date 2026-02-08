@@ -1421,6 +1421,15 @@ async def on_ready():
     print(f'🌐 Serveurs: {len(bot.guilds)}')
     print(f'👥 Utilisateurs: {sum(g.member_count for g in bot.guilds)}')
     print("="*50)
+
+      # AJOUTEZ CES LIGNES ICI
+    try:
+        await bot.add_cog(SecurityModule(bot))
+        print("🛡️ ✅ Module de sécurité chargé !")
+    except Exception as e:
+        print(f"⚠️ Erreur chargement sécurité: {e}")
+        import traceback
+        traceback.print_exc()
     # Statut personnalisé
     activity = discord.Streaming(
         name="🎫 DM pour ouvrir un ticket",
@@ -1549,6 +1558,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
