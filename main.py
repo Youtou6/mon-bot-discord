@@ -23,7 +23,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 
 
-# Puis ajoutez le contenu du fichier lunera_commands.py que je viens de créer
 # ========== CHARGER LE SYSTÈME GIVEAWAY ==========
 try:
     with open('giveaway.py', 'r', encoding='utf-8') as f:
@@ -33,23 +32,8 @@ try:
 except Exception as e:
     print(f"⚠️ Erreur lors du chargement du système Giveaway: {e}")
 
-# ========== CHARGER LE SYSTÈME AUTOMOD ==========
-try:
-    with open('automod.py', 'r', encoding='utf-8') as f:
-        automod_code = f.read()
-        exec(automod_code, globals())
-    print("✅ Système AutoMod chargé avec succès !")
-except Exception as e:
-    print(f"⚠️ Erreur lors du chargement du système AutoMod: {e}")
-
-# ========== CHARGER LUNERA SECURITY ==========
-try:
-    with open('lunera_security.py', 'r', encoding='utf-8') as f:
-        lunera_code = f.read()
-        exec(lunera_code, globals())
-    print("🌙 ✅ Lunera Security chargé !")
-except Exception as e:
-    print(f"⚠️ Erreur Lunera: {e}")
+# Les autres systèmes sont désactivés pour l'instant
+print("ℹ️ AutoMod et Lunera désactivés (fichiers manquants)")
 
 # ========== STOCKAGE DES DONNÉES ==========
 modmail_tickets = {}
@@ -975,10 +959,10 @@ async def list_tickets(interaction: discord.Interaction):
 @bot.event
 async def on_message(message):
     # Lunera Security check
-    try:
-        await on_lunera_message(message)
-    except Exception as e:
-        print(f"Erreur Lunera: {e}")
+   # try:
+   #     await on_lunera_message(message)
+   # except Exception as e:
+   #     print(f"Erreur Lunera: {e}")
     
     # AutoMod check (AVANT TOUT)
     try:
@@ -1425,11 +1409,11 @@ async def on_member_join(member):
 
 @bot.event
 async def on_ready():
-    try:
-        await setup_lunera_commands(bot)
-        print("🌙 Commandes Lunera enregistrées")
-    except Exception as e:
-        print(f"⚠️ Erreur Lunera commands: {e}")
+   # try:
+    #    await setup_lunera_commands(bot)
+    #    print("🌙 Commandes Lunera enregistrées")
+   # except Exception as e:
+      #  print(f"⚠️ Erreur Lunera commands: {e}")
     
     print("="*50)
     print(f'✅ {bot.user} est connecté et prêt !')
@@ -1565,6 +1549,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
