@@ -1467,30 +1467,11 @@ async def on_ready():
     print("="*50)
     print("🚀 Bot opérationnel !")
     print("="*50)
-@bot.event
-async def on_ready():
-    # ... votre code existant ...
-    
-    # Démarrer la vérification d'inactivité
-    if not check_inactive_tickets.is_running():
-        check_inactive_tickets.start()
-        print("✅ Vérification d'inactivité démarrée")
-    
-    print("="*50)
-    print("🚀 Bot opérationnel !")
-    print("="*50)
-    
-    # ✅ AJOUTEZ CES LIGNES ICI
-    try:
-        await bot.add_cog(SecurityModule(bot))
-        print("🛡️ ✅ Module de sécurité chargé et activé !")
-    except Exception as e:
-        print(f"⚠️ Erreur chargement module sécurité: {e}")
-```
-
-## 3️⃣ Structure finale des fichiers
-```
-
+try:
+    await bot.add_cog(SecurityModule(bot))
+    print("🛡️ ✅ Module de sécurité chargé !")
+except Exception as e:
+    print(f"⚠️ Erreur sécurité: {e}")
 # Serveur web pour Render
 app = Flask(__name__)
 
@@ -1583,6 +1564,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
