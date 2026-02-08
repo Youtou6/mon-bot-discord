@@ -21,8 +21,7 @@ from security import SecurityModule
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Tout en haut du fichier, après les imports
-from votre_fichier_lunera import *  # Importer toutes les fonctions Lunera
+
 
 # Puis ajoutez le contenu du fichier lunera_commands.py que je viens de créer
 # ========== CHARGER LE SYSTÈME GIVEAWAY ==========
@@ -1566,6 +1565,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
