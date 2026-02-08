@@ -1467,11 +1467,13 @@ async def on_ready():
     print("="*50)
     print("🚀 Bot opérationnel !")
     print("="*50)
-try:
-    await bot.add_cog(SecurityModule(bot))
-    print("🛡️ ✅ Module de sécurité chargé !")
-except Exception as e:
-    print(f"⚠️ Erreur sécurité: {e}")
+       # ✅ ICI, À L'INTÉRIEUR DE on_ready()
+    try:
+        await bot.add_cog(SecurityModule(bot))
+        print("🛡️ ✅ Module de sécurité chargé !")
+    except Exception as e:
+        print(f"⚠️ Erreur sécurité: {e}")
+
 # Serveur web pour Render
 app = Flask(__name__)
 
@@ -1564,6 +1566,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
