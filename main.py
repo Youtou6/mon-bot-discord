@@ -1490,14 +1490,7 @@ async def on_ready():
 
 ## 3️⃣ Structure finale des fichiers
 ```
-votre_projet/
-├── main.py (votre fichier existant avec les modifications)
-├── security.py (nouveau fichier avec le module de sécurité)
-├── giveaway.py (existant)
-├── automod.py (existant)
-├── lunera_security.py (existant)
-├── requirements.txt (existant)
-└── forbidden_words.json (sera créé automatiquement)
+
 # Serveur web pour Render
 app = Flask(__name__)
 
@@ -1590,6 +1583,7 @@ else:
     bot.start_time = datetime.now()
     keep_alive()
     bot.run(TOKEN)
+
 
 
 
